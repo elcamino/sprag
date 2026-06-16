@@ -32,8 +32,6 @@ export function formatDuration(seconds: number): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
-const SMOOTHING = 0.3;
-
 export type TransferSample = {
   bytesPerSecond: number;
   etaSeconds: number | null;
@@ -44,34 +42,31 @@ export type TransferEstimator = {
 };
 
 export function createTransferEstimator(): TransferEstimator {
-  let lastMs: number | null = null;
-  let lastLoaded = 0;
-  let rate: number | null = null; // bytes/second, exponentially smoothed
+  let startMs: number | null = null;
+  let startLoaded = 0;
 
   return {
     update(loaded: number, total: number, nowMs: number): TransferSample {
-      // 1. Completion takes precedence, even on the very first sample.
+      // Anchor on the first sample, then measure throughput as cumulative bytes
+      // over cumulative wall-clock time. XHR upload progress reports bytes
+      // written to the socket send buffer, so it arrives in fast bursts
+      // separated by slow network drains; an instantaneous per-sample rate is
+      // biased toward the burst speed and badly overestimates throughput.
+      // Averaging from a fixed anchor divides by real elapsed time and is immune
+      // to that sampling bias.
+      if (startMs === null) {
+        startMs = nowMs;
+        startLoaded = loaded;
+        return { bytesPerSecond: 0, etaSeconds: loaded >= total ? 0 : null };
+      }
+      const elapsedMs = nowMs - startMs;
+      const bytes = loaded - startLoaded;
+      const bytesPerSecond = elapsedMs > 0 && bytes > 0 ? (bytes / elapsedMs) * 1000 : 0;
       if (loaded >= total) {
-        return { bytesPerSecond: rate ?? 0, etaSeconds: 0 };
+        return { bytesPerSecond, etaSeconds: 0 };
       }
-      // 2. First sample: no interval yet, so no rate can be derived.
-      if (lastMs === null) {
-        lastMs = nowMs;
-        lastLoaded = loaded;
-        return { bytesPerSecond: rate ?? 0, etaSeconds: null };
-      }
-      const deltaMs = nowMs - lastMs;
-      // 3. Guard against a non-positive interval (two events on the same clock).
-      if (deltaMs <= 0) {
-        const eta = rate && rate > 0 ? (total - loaded) / rate : null;
-        return { bytesPerSecond: rate ?? 0, etaSeconds: eta };
-      }
-      const instant = ((loaded - lastLoaded) / deltaMs) * 1000;
-      rate = rate === null ? instant : SMOOTHING * instant + (1 - SMOOTHING) * rate;
-      lastMs = nowMs;
-      lastLoaded = loaded;
-      const eta = rate > 0 ? (total - loaded) / rate : null;
-      return { bytesPerSecond: rate, etaSeconds: eta };
+      const etaSeconds = bytesPerSecond > 0 ? (total - loaded) / bytesPerSecond : null;
+      return { bytesPerSecond, etaSeconds };
     }
   };
 }

@@ -69,24 +69,54 @@ describe("createTransferEstimator", () => {
     expect(result.etaSeconds as number).toBeLessThan(0.95);
   });
 
-  it("smooths toward a new rate when the speed changes", () => {
+  it("stays realistic when upload progress arrives in fast bursts", () => {
+    // XHR upload progress reports bytes written to the socket buffer, not bytes
+    // on the wire. A slow ~1 MiB/s upload therefore arrives as fast bursts: each
+    // ~1 MiB is written to the socket in ~10 ms, once per second, with the
+    // network draining the buffer in between. An instantaneous-rate model is
+    // biased toward the burst speed and grossly overestimates throughput.
     const estimator = createTransferEstimator();
-    estimator.update(0, 100 * MIB, 0);
-    estimator.update(10 * MIB, 100 * MIB, 1000); // establish 10 MiB/s
-    // Then only 0.1 MiB in 100 ms -> 1 MiB/s instantaneous.
-    const slow = estimator.update(10 * MIB + 0.1 * MIB, 100 * MIB, 1100);
-    // EWMA (alpha 0.3): 0.3*1 + 0.7*10 = 7.3 MiB/s -> between 1 and 10 MiB/s.
-    expect(slow.bytesPerSecond).toBeGreaterThan(1 * MIB);
-    expect(slow.bytesPerSecond).toBeLessThan(10 * MIB);
+    const total = 100 * MIB;
+    estimator.update(0, total, 0);
+    let last = estimator.update(0, total, 0);
+    for (let sec = 1; sec <= 60; sec++) {
+      // mid-burst sample, then the burst completes 10 ms later
+      estimator.update((sec - 0.5) * MIB, total, sec * 1000 + 10);
+      last = estimator.update(sec * MIB, total, sec * 1000 + 20);
+    }
+    // 60 MiB sent in ~60 s -> sustained ~1 MiB/s -> ~40 s remaining.
+    expect(last.etaSeconds).not.toBeNull();
+    expect(last.etaSeconds as number).toBeGreaterThan(25);
+    expect(last.etaSeconds as number).toBeLessThan(60);
   });
 
-  it("does not divide by zero on a repeated timestamp", () => {
+  it("reports the overall average, not the latest interval's instant rate", () => {
     const estimator = createTransferEstimator();
-    estimator.update(0, 10 * MIB, 0);
+    const total = 100 * MIB;
+    estimator.update(0, total, 0);
+    estimator.update(50 * MIB, total, 1000); // 50 MiB in 1 s
+    // 10 s later only 1 more MiB arrived (a near-stall). An instantaneous model
+    // would read ~0.1 MiB/s here; the overall average is 51 MiB / 11 s.
+    const result = estimator.update(51 * MIB, total, 11000);
+    expect(result.bytesPerSecond).toBeGreaterThan(4 * MIB);
+    expect(result.bytesPerSecond).toBeLessThan(5.5 * MIB);
+    // 49 MiB remaining at ~4.6 MiB/s -> ~10-11 s.
+    expect(result.etaSeconds as number).toBeGreaterThan(8);
+    expect(result.etaSeconds as number).toBeLessThan(13);
+  });
+
+  it("returns null until real time and bytes have elapsed", () => {
+    const estimator = createTransferEstimator();
+    estimator.update(0, 10 * MIB, 0); // anchor
+    // Same timestamp, no progress: cannot compute a rate yet.
+    const stalled = estimator.update(0, 10 * MIB, 0);
+    expect(stalled.bytesPerSecond).toBe(0);
+    expect(stalled.etaSeconds).toBeNull();
+    // A later repeated timestamp must never produce NaN/Infinity.
     estimator.update(1 * MIB, 10 * MIB, 100);
-    const same = estimator.update(2 * MIB, 10 * MIB, 100); // deltaMs == 0
-    expect(Number.isFinite(same.bytesPerSecond)).toBe(true);
-    expect(same.etaSeconds === null || Number.isFinite(same.etaSeconds)).toBe(true);
+    const repeated = estimator.update(2 * MIB, 10 * MIB, 100);
+    expect(Number.isFinite(repeated.bytesPerSecond)).toBe(true);
+    expect(repeated.etaSeconds === null || Number.isFinite(repeated.etaSeconds)).toBe(true);
   });
 
   it("reports a zero eta at completion, even as the first sample", () => {
