@@ -1,5 +1,7 @@
 /zener
 /data/
 /frontend/node_modules/
+/frontend/dist/
 /.env
 /.tmp/
+*.db
