@@ -17,7 +17,7 @@
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, FileUp, KeyRound, XCircle } from "lucide-react";
 import { api, formatBytes, PublicPage } from "../api";
-import { createTransferEstimator } from "../transfer";
+import { createTransferEstimator, formatDuration } from "../transfer";
 
 type UploadState = {
   id: string;
@@ -200,11 +200,16 @@ export default function Upload() {
                 <div className="upload-row" key={upload.id}>
                   <span>
                     <strong>{upload.name}</strong>
-                    <small>{upload.message ?? formatBytes(upload.size)}</small>
+                    <small>{uploadDetail(upload)}</small>
                   </span>
                   <span className={`upload-status ${upload.status}`}>
-                    {upload.status === "done" ? <CheckCircle2 size={18} /> : upload.status === "error" ? <XCircle size={18} /> : null}
-                    {upload.status === "done" ? "Uploaded" : upload.status === "error" ? "Rejected" : `${upload.progress}%`}
+                    <span className="upload-status-line">
+                      {upload.status === "done" ? <CheckCircle2 size={18} /> : upload.status === "error" ? <XCircle size={18} /> : null}
+                      {upload.status === "done" ? "Uploaded" : upload.status === "error" ? "Rejected" : `${upload.progress}%`}
+                    </span>
+                    {upload.status === "uploading" && upload.etaSeconds !== null && (
+                      <small className="upload-eta">{formatDuration(upload.etaSeconds)} left</small>
+                    )}
                   </span>
                   <span className="progress-track">
                     <span style={{ width: `${upload.progress}%` }} />
@@ -217,6 +222,16 @@ export default function Upload() {
       </section>
     </main>
   );
+}
+
+function uploadDetail(upload: UploadState): string {
+  if (upload.message) {
+    return upload.message;
+  }
+  if (upload.status === "uploading") {
+    return `${formatBytes(upload.loaded)} / ${formatBytes(upload.total)}`;
+  }
+  return formatBytes(upload.size);
 }
 
 function validateClientFile(file: File, page: PublicPage): { file: File; error?: string } {

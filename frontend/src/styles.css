@@ -423,11 +423,23 @@ textarea:focus {
 }
 
 .upload-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-weight: 800;
+  color: #60685b;
+}
+
+.upload-status-line {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 800;
-  color: #60685b;
+}
+
+.upload-eta {
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .upload-status.done {
