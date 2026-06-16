@@ -605,6 +605,12 @@ textarea:focus {
   transition: width 160ms ease;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .progress-track span {
+    transition: none;
+  }
+}
+
 .theme-switch {
   display: inline-flex;
   gap: 2px;

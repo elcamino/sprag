@@ -33,7 +33,7 @@ export default {
         sans: ['"Hanken Grotesk Variable"', "system-ui", "sans-serif"]
       },
       boxShadow: {
-        line: "0 1px 0 rgba(17,19,15,0.08)",
+        line: "0 1px 0 var(--border)",
         lift: "var(--shadow-card)"
       }
     }
