@@ -28,6 +28,7 @@ import {
   UploadCloud
 } from "lucide-react";
 import { api, CreatedPage, formatBytes, formatDate, PageSummary, UploadFile } from "../api";
+import { ThemeSwitch } from "../ThemeSwitch";
 
 type PageForm = {
   title: string;
@@ -147,6 +148,7 @@ export default function AdminDashboard() {
           <h1>Dropboxes</h1>
         </div>
         <div className="topbar-actions">
+          <ThemeSwitch />
           <button className="icon-button" onClick={() => loadPages()} title="Refresh">
             <RefreshCw size={18} />
           </button>

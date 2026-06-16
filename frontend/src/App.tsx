@@ -15,6 +15,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { lazy, Suspense } from "react";
+import { BrandMotif } from "./BrandMotif";
+import { ThemeSwitch } from "./ThemeSwitch";
 
 const Upload = lazy(() => import("./pages/Upload"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
@@ -22,11 +24,14 @@ const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
 
 export default function App() {
   const path = window.location.pathname;
-  const route = path.startsWith("/admin")
-    ? path === "/admin" || path === "/admin/"
-      ? <AdminLogin />
-      : <AdminDashboard />
-    : <Upload />;
+  const isDashboard = path.startsWith("/admin") && path !== "/admin" && path !== "/admin/";
+  const route = path.startsWith("/admin") ? (isDashboard ? <AdminDashboard /> : <AdminLogin />) : <Upload />;
 
-  return <Suspense fallback={<div className="route-loading">Zener</div>}>{route}</Suspense>;
+  return (
+    <>
+      <BrandMotif />
+      {!isDashboard && <ThemeSwitch fixed />}
+      <Suspense fallback={<div className="route-loading">Zener</div>}>{route}</Suspense>
+    </>
+  );
 }
