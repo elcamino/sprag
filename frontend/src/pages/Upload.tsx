@@ -17,12 +17,16 @@
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, FileUp, KeyRound, XCircle } from "lucide-react";
 import { api, formatBytes, PublicPage } from "../api";
+import { createTransferEstimator } from "../transfer";
 
 type UploadState = {
   id: string;
   name: string;
   size: number;
+  loaded: number;
+  total: number;
   progress: number;
+  etaSeconds: number | null;
   status: "queued" | "uploading" | "done" | "error";
   message?: string;
 };
@@ -76,7 +80,10 @@ export default function Upload() {
       id: crypto.randomUUID(),
       name: file.name,
       size: file.size,
+      loaded: 0,
+      total: file.size,
       progress: error ? 0 : 1,
+      etaSeconds: null,
       status: error ? "error" : "queued",
       message: error
     }) satisfies UploadState);
@@ -90,17 +97,29 @@ export default function Upload() {
     return new Promise<void>((resolve) => {
       const xhr = new XMLHttpRequest();
       const form = new FormData();
+      const estimator = createTransferEstimator();
       form.append("file", file);
       xhr.open("POST", `/api/u/${slug}`);
       xhr.withCredentials = true;
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
+        const { etaSeconds } = estimator.update(event.loaded, event.total, performance.now());
         const progress = Math.max(1, Math.round((event.loaded / event.total) * 100));
-        setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "uploading", progress } : item)));
+        setUploads((current) =>
+          current.map((item) =>
+            item.id === id
+              ? { ...item, status: "uploading", progress, loaded: event.loaded, total: event.total, etaSeconds }
+              : item
+          )
+        );
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "done", progress: 100 } : item)));
+          setUploads((current) =>
+            current.map((item) =>
+              item.id === id ? { ...item, status: "done", progress: 100, loaded: item.total, etaSeconds: null } : item
+            )
+          );
         } else {
           setUploads((current) =>
             current.map((item) => (item.id === id ? { ...item, status: "error", message: parseXHRMessage(xhr) } : item))
