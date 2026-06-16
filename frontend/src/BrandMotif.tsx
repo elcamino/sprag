@@ -16,7 +16,7 @@
 
 export function BrandMotif() {
   return (
-    <svg className="brand-motif" aria-hidden="true" focusable="false">
+    <svg className="brand-motif" width="100%" height="100%" aria-hidden="true" focusable="false">
       <defs>
         <pattern id="zener-motif" width="240" height="240" patternUnits="userSpaceOnUse">
           <circle cx="48" cy="56" r="20" />
