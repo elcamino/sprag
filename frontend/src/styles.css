@@ -20,13 +20,84 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theme tokens. data-theme is an override; absent means follow the OS.
+   Keep [data-theme="dark"] and the prefers-color-scheme block in sync. */
 :root {
-  color: #11130f;
-  background: #f7f4ed;
-  font-family: "Aptos", "Avenir Next", "Segoe UI", sans-serif;
+  color-scheme: light;
+  --bg-canvas: #ece9e3;
+  --bg-card: #ffffff;
+  --bg-inset: #f7f5f0;
+  --border: rgba(26, 24, 19, 0.1);
+  --border-strong: rgba(26, 24, 19, 0.16);
+  --text-strong: #1a1813;
+  --text: #3a3528;
+  --text-muted: #6f6b5e;
+  --shadow-card: 0 14px 36px rgba(26, 24, 19, 0.12);
+  --track: rgba(26, 24, 19, 0.1);
+  --accent: #c9952f;
+  --accent-ink: #8a6420;
+  --accent-soft: rgba(201, 149, 47, 0.1);
+  --accent-border: rgba(176, 134, 58, 0.5);
+  --on-accent: #1a1813;
+  --success: #1e5e44;
+  --danger: #a8392c;
+  --focus: rgba(201, 149, 47, 0.35);
+  --motif: rgba(26, 24, 19, 0.05);
+
+  font-family: "Hanken Grotesk Variable", "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  color: var(--text-strong);
+  background: var(--bg-canvas);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-canvas: #141109;
+  --bg-card: #1c1a12;
+  --bg-inset: #232016;
+  --border: #35311f;
+  --border-strong: #45402c;
+  --text-strong: #f4f0e5;
+  --text: #d9d3c4;
+  --text-muted: #9a9281;
+  --shadow-card: 0 18px 44px rgba(0, 0, 0, 0.45);
+  --track: rgba(243, 239, 228, 0.1);
+  --accent: #e7b552;
+  --accent-ink: #e7b552;
+  --accent-soft: rgba(231, 181, 82, 0.08);
+  --accent-border: rgba(231, 181, 82, 0.38);
+  --on-accent: #1a1813;
+  --success: #6fbf98;
+  --danger: #e2776a;
+  --focus: rgba(231, 181, 82, 0.4);
+  --motif: rgba(231, 181, 82, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg-canvas: #141109;
+    --bg-card: #1c1a12;
+    --bg-inset: #232016;
+    --border: #35311f;
+    --border-strong: #45402c;
+    --text-strong: #f4f0e5;
+    --text: #d9d3c4;
+    --text-muted: #9a9281;
+    --shadow-card: 0 18px 44px rgba(0, 0, 0, 0.45);
+    --track: rgba(243, 239, 228, 0.1);
+    --accent: #e7b552;
+    --accent-ink: #e7b552;
+    --accent-soft: rgba(231, 181, 82, 0.08);
+    --accent-border: rgba(231, 181, 82, 0.38);
+    --on-accent: #1a1813;
+    --success: #6fbf98;
+    --danger: #e2776a;
+    --focus: rgba(231, 181, 82, 0.4);
+    --motif: rgba(231, 181, 82, 0.07);
+  }
 }
 
 * {
@@ -37,11 +108,46 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    linear-gradient(90deg, rgba(17, 19, 15, 0.05) 1px, transparent 1px),
-    linear-gradient(rgba(17, 19, 15, 0.04) 1px, transparent 1px),
-    #f7f4ed;
-  background-size: 34px 34px;
+  background: var(--bg-canvas);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body,
+  .login-panel,
+  .drop-panel,
+  .closed-panel,
+  .panel,
+  .page-row,
+  .file-row,
+  .upload-row,
+  .share-block,
+  input,
+  textarea,
+  .primary-action,
+  .secondary-action,
+  .icon-button,
+  .theme-switch,
+  .theme-switch button {
+    transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  }
+}
+
+.brand-motif {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.brand-motif circle,
+.brand-motif path,
+.brand-motif rect,
+.brand-motif polygon {
+  fill: none;
+  stroke: var(--motif);
+  stroke-width: 1.5;
 }
 
 button,
@@ -55,15 +161,24 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+:where(button, a):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .route-loading {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
   display: grid;
   place-items: center;
-  color: #343a32;
+  color: var(--text-muted);
 }
 
 .login-shell,
 .upload-shell {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
   display: grid;
   place-items: center;
@@ -74,9 +189,9 @@ a {
 .drop-panel,
 .closed-panel,
 .panel {
-  border: 1px solid rgba(17, 19, 15, 0.15);
-  background: rgba(247, 244, 237, 0.93);
-  box-shadow: 0 20px 60px rgba(17, 19, 15, 0.16);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
 }
 
 .login-panel {
@@ -90,9 +205,10 @@ a {
 .admin-topbar h1,
 .detail-header h2 {
   margin: 0;
-  font-size: clamp(2rem, 6vw, 4.25rem);
-  line-height: 0.95;
-  letter-spacing: 0;
+  font-size: clamp(2.25rem, 5vw, 3.5rem);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-weight: 700;
 }
 
 .stack,
@@ -105,17 +221,17 @@ a {
 label {
   display: grid;
   gap: 7px;
-  color: #343a32;
-  font-size: 0.86rem;
-  font-weight: 700;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 input,
 textarea {
   width: 100%;
-  border: 1px solid rgba(17, 19, 15, 0.18);
-  background: #fffdf8;
-  color: #11130f;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-strong);
   border-radius: 6px;
   padding: 11px 12px;
   outline: none;
@@ -128,8 +244,8 @@ textarea {
 
 input:focus,
 textarea:focus {
-  border-color: #2f6b4f;
-  box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.18);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
 }
 
 .mark {
@@ -137,15 +253,16 @@ textarea:focus {
   height: 44px;
   display: inline-grid;
   place-items: center;
-  border-radius: 8px;
-  background: #11130f;
-  color: #c4d8a8;
+  border-radius: 11px;
+  border: 1.5px solid var(--accent);
+  color: var(--accent);
+  background: transparent;
 }
 
 .primary-action,
 .secondary-action,
 .icon-button {
-  border: 1px solid rgba(17, 19, 15, 0.15);
+  border: 1px solid var(--border);
   border-radius: 6px;
   min-height: 40px;
   display: inline-flex;
@@ -157,27 +274,33 @@ textarea:focus {
 }
 
 .primary-action {
-  background: #2f6b4f;
-  color: #fffdf8;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
   padding: 0 16px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .secondary-action {
-  background: #fffdf8;
-  color: #11130f;
+  background: var(--bg-card);
+  color: var(--text-strong);
   padding: 0 12px;
-  font-weight: 800;
+  font-weight: 600;
+}
+
+.secondary-action:hover,
+.icon-button:hover {
+  border-color: var(--border-strong);
 }
 
 .icon-button {
   width: 40px;
-  color: #11130f;
-  background: #fffdf8;
+  color: var(--text-strong);
+  background: var(--bg-card);
 }
 
 .icon-button.danger {
-  color: #a44a3f;
+  color: var(--danger);
 }
 
 .primary-action:disabled {
@@ -187,11 +310,13 @@ textarea:focus {
 
 .error-line {
   margin: 0;
-  color: #a44a3f;
-  font-weight: 800;
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .admin-shell {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
   padding: 22px;
 }
@@ -207,9 +332,10 @@ textarea:focus {
 
 .eyebrow {
   margin: 0 0 6px;
-  color: #2f6b4f;
-  font-size: 0.74rem;
-  font-weight: 900;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -246,6 +372,8 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 1.15rem;
+  font-weight: 600;
 }
 
 .field-row {
@@ -266,16 +394,16 @@ textarea:focus {
   text-align: left;
   width: 100%;
   padding: 12px;
-  border: 1px solid rgba(17, 19, 15, 0.12);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fffdf8;
-  color: #11130f;
+  background: var(--bg-inset);
+  color: var(--text-strong);
   cursor: pointer;
 }
 
 .page-row.selected {
-  border-color: #2f6b4f;
-  box-shadow: inset 4px 0 0 #2f6b4f;
+  border-color: var(--accent);
+  box-shadow: inset 4px 0 0 var(--accent);
 }
 
 .page-row strong,
@@ -289,7 +417,7 @@ textarea:focus {
 .file-row small,
 .upload-row small,
 .muted {
-  color: #60685b;
+  color: var(--text-muted);
 }
 
 .status-dot {
@@ -297,11 +425,11 @@ textarea:focus {
   height: 10px;
   margin-top: 5px;
   border-radius: 999px;
-  background: #a44a3f;
+  background: var(--danger);
 }
 
 .status-dot.on {
-  background: #2f6b4f;
+  background: var(--success);
 }
 
 .detail-panel {
@@ -315,12 +443,12 @@ textarea:focus {
   justify-content: space-between;
   gap: 16px;
   align-items: start;
-  border-bottom: 1px solid rgba(17, 19, 15, 0.12);
+  border-bottom: 1px solid var(--border);
   padding-bottom: 18px;
 }
 
 .detail-header h2 {
-  font-size: clamp(2rem, 4vw, 3.8rem);
+  font-size: clamp(1.75rem, 4vw, 2.75rem);
 }
 
 .share-block {
@@ -329,8 +457,8 @@ textarea:focus {
   grid-template-columns: 116px minmax(0, 1fr);
   gap: 18px;
   align-items: center;
-  border: 1px solid rgba(17, 19, 15, 0.12);
-  background: #fffdf8;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
   border-radius: 8px;
   padding: 14px;
 }
@@ -339,7 +467,7 @@ textarea:focus {
   display: block;
   margin: 0 0 12px;
   overflow-wrap: anywhere;
-  color: #343a32;
+  color: var(--text);
 }
 
 .file-table {
@@ -355,16 +483,16 @@ textarea:focus {
   gap: 14px;
   align-items: center;
   padding: 12px;
-  border: 1px solid rgba(17, 19, 15, 0.12);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fffdf8;
+  background: var(--bg-inset);
 }
 
 .empty-state {
-  border: 1px dashed rgba(17, 19, 15, 0.24);
+  border: 1px dashed var(--border-strong);
   border-radius: 8px;
   padding: 32px;
-  color: #60685b;
+  color: var(--text-muted);
   text-align: center;
 }
 
@@ -383,6 +511,7 @@ textarea:focus {
 
 .upload-heading p {
   max-width: 62ch;
+  color: var(--text);
 }
 
 .drop-zone {
@@ -390,11 +519,16 @@ textarea:focus {
   place-items: center;
   gap: 10px;
   min-height: 270px;
-  border: 2px dashed rgba(47, 107, 79, 0.5);
+  border: 2px dashed var(--accent-border);
   border-radius: 8px;
-  background: rgba(196, 216, 168, 0.2);
+  background: var(--accent-soft);
+  color: var(--text-strong);
   cursor: pointer;
   text-align: center;
+}
+
+.drop-zone svg {
+  color: var(--accent);
 }
 
 .drop-zone input {
@@ -403,6 +537,11 @@ textarea:focus {
 
 .drop-zone strong {
   font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.drop-zone small {
+  color: var(--text-muted);
 }
 
 .upload-list {
@@ -417,9 +556,9 @@ textarea:focus {
   gap: 8px 14px;
   align-items: center;
   padding: 12px;
-  border: 1px solid rgba(17, 19, 15, 0.12);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fffdf8;
+  background: var(--bg-inset);
 }
 
 .upload-status {
@@ -427,8 +566,8 @@ textarea:focus {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
-  font-weight: 800;
-  color: #60685b;
+  font-weight: 600;
+  color: var(--accent-ink);
 }
 
 .upload-status-line {
@@ -438,16 +577,17 @@ textarea:focus {
 }
 
 .upload-eta {
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .upload-status.done {
-  color: #2f6b4f;
+  color: var(--success);
 }
 
 .upload-status.error {
-  color: #a44a3f;
+  color: var(--danger);
 }
 
 .progress-track {
@@ -455,14 +595,53 @@ textarea:focus {
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(17, 19, 15, 0.08);
+  background: var(--track);
 }
 
 .progress-track span {
   display: block;
   height: 100%;
-  background: #d9a441;
+  background: var(--accent);
   transition: width 160ms ease;
+}
+
+.theme-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+}
+
+.theme-switch button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.theme-switch button:hover {
+  color: var(--text-strong);
+}
+
+.theme-switch button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.theme-switch-fixed {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
 }
 
 .closed-panel {
@@ -476,7 +655,6 @@ textarea:focus {
   .admin-grid {
     grid-template-columns: 1fr;
   }
-
   .detail-panel {
     min-height: auto;
   }
@@ -486,7 +664,6 @@ textarea:focus {
   .admin-shell {
     padding: 12px;
   }
-
   .admin-topbar,
   .detail-header,
   .file-toolbar,
@@ -494,12 +671,10 @@ textarea:focus {
     align-items: stretch;
     flex-direction: column;
   }
-
   .field-row,
   .share-block {
     grid-template-columns: 1fr;
   }
-
   .upload-heading {
     flex-direction: column;
   }

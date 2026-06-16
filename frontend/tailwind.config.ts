@@ -21,17 +21,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#11130f",
-        paper: "#f7f4ed",
-        graphite: "#343a32",
-        moss: "#2f6b4f",
-        reed: "#c4d8a8",
-        signal: "#d9a441",
-        oxide: "#a44a3f"
+        ink: "var(--text-strong)",
+        paper: "var(--bg-canvas)",
+        graphite: "var(--text)",
+        moss: "var(--success)",
+        reed: "var(--accent-soft)",
+        signal: "var(--accent)",
+        oxide: "var(--danger)"
+      },
+      fontFamily: {
+        sans: ['"Hanken Grotesk Variable"', "system-ui", "sans-serif"]
       },
       boxShadow: {
         line: "0 1px 0 rgba(17,19,15,0.08)",
-        lift: "0 16px 40px rgba(17,19,15,0.12)"
+        lift: "var(--shadow-card)"
       }
     }
   },
