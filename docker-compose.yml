@@ -1,0 +1,42 @@
+services:
+  zener-app:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    networks:
+      - zener-net
+    # No published ports: the app is only reachable through the reverse proxy.
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  # Demonstration reverse proxy. It terminates TLS and forwards to the app,
+  # appending the real client IP to X-Forwarded-For (one hop -> set
+  # TRUSTED_PROXY_HOPS=1 in .env). In production you may instead run a shared
+  # Caddy on an external network; see README.md for that variant.
+  caddy:
+    image: caddy:2
+    depends_on:
+      - zener-app
+    environment:
+      ZENER_DOMAIN: ${ZENER_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - zener-net
+    restart: unless-stopped
+
+networks:
+  zener-net:
+    driver: bridge
+
+volumes:
+  caddy-data:
+  caddy-config:

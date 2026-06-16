@@ -1,0 +1,5 @@
+/zener
+/data/
+/frontend/node_modules/
+/.env
+/.tmp/

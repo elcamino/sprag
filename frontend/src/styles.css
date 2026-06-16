@@ -1,0 +1,494 @@
+/*
+ * Zener - a tiny anonymous file dropbox.
+ * Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #11130f;
+  background: #f7f4ed;
+  font-family: "Aptos", "Avenir Next", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(90deg, rgba(17, 19, 15, 0.05) 1px, transparent 1px),
+    linear-gradient(rgba(17, 19, 15, 0.04) 1px, transparent 1px),
+    #f7f4ed;
+  background-size: 34px 34px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.route-loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: #343a32;
+}
+
+.login-shell,
+.upload-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel,
+.drop-panel,
+.closed-panel,
+.panel {
+  border: 1px solid rgba(17, 19, 15, 0.15);
+  background: rgba(247, 244, 237, 0.93);
+  box-shadow: 0 20px 60px rgba(17, 19, 15, 0.16);
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  padding: 32px;
+  border-radius: 8px;
+}
+
+.login-panel h1,
+.drop-panel h1,
+.admin-topbar h1,
+.detail-header h2 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 4.25rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.stack,
+.new-page-form,
+.pin-form {
+  display: grid;
+  gap: 16px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: #343a32;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(17, 19, 15, 0.18);
+  background: #fffdf8;
+  color: #11130f;
+  border-radius: 6px;
+  padding: 11px 12px;
+  outline: none;
+}
+
+textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
+  border-color: #2f6b4f;
+  box-shadow: 0 0 0 3px rgba(47, 107, 79, 0.18);
+}
+
+.mark {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #11130f;
+  color: #c4d8a8;
+}
+
+.primary-action,
+.secondary-action,
+.icon-button {
+  border: 1px solid rgba(17, 19, 15, 0.15);
+  border-radius: 6px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.primary-action {
+  background: #2f6b4f;
+  color: #fffdf8;
+  padding: 0 16px;
+  font-weight: 800;
+}
+
+.secondary-action {
+  background: #fffdf8;
+  color: #11130f;
+  padding: 0 12px;
+  font-weight: 800;
+}
+
+.icon-button {
+  width: 40px;
+  color: #11130f;
+  background: #fffdf8;
+}
+
+.icon-button.danger {
+  color: #a44a3f;
+}
+
+.primary-action:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.error-line {
+  margin: 0;
+  color: #a44a3f;
+  font-weight: 800;
+}
+
+.admin-shell {
+  min-height: 100vh;
+  padding: 22px;
+}
+
+.admin-topbar {
+  max-width: 1480px;
+  margin: 0 auto 18px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #2f6b4f;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.topbar-actions,
+.detail-actions,
+.file-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-grid {
+  max-width: 1480px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.panel {
+  border-radius: 8px;
+}
+
+.page-list-panel {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+}
+
+.new-page-form h2,
+.file-toolbar h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.page-list {
+  display: grid;
+  gap: 8px;
+}
+
+.page-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+  text-align: left;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(17, 19, 15, 0.12);
+  border-radius: 6px;
+  background: #fffdf8;
+  color: #11130f;
+  cursor: pointer;
+}
+
+.page-row.selected {
+  border-color: #2f6b4f;
+  box-shadow: inset 4px 0 0 #2f6b4f;
+}
+
+.page-row strong,
+.file-row strong,
+.upload-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.page-row small,
+.file-row small,
+.upload-row small,
+.muted {
+  color: #60685b;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #a44a3f;
+}
+
+.status-dot.on {
+  background: #2f6b4f;
+}
+
+.detail-panel {
+  min-height: calc(100vh - 104px);
+  padding: 22px;
+}
+
+.detail-header,
+.file-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  border-bottom: 1px solid rgba(17, 19, 15, 0.12);
+  padding-bottom: 18px;
+}
+
+.detail-header h2 {
+  font-size: clamp(2rem, 4vw, 3.8rem);
+}
+
+.share-block {
+  margin: 18px 0;
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  border: 1px solid rgba(17, 19, 15, 0.12);
+  background: #fffdf8;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.share-block code {
+  display: block;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+  color: #343a32;
+}
+
+.file-table {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.file-row {
+  min-height: 58px;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(17, 19, 15, 0.12);
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.empty-state {
+  border: 1px dashed rgba(17, 19, 15, 0.24);
+  border-radius: 8px;
+  padding: 32px;
+  color: #60685b;
+  text-align: center;
+}
+
+.drop-panel {
+  width: min(760px, 100%);
+  padding: clamp(20px, 4vw, 44px);
+  border-radius: 8px;
+}
+
+.upload-heading {
+  display: flex;
+  align-items: start;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.upload-heading p {
+  max-width: 62ch;
+}
+
+.drop-zone {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 270px;
+  border: 2px dashed rgba(47, 107, 79, 0.5);
+  border-radius: 8px;
+  background: rgba(196, 216, 168, 0.2);
+  cursor: pointer;
+  text-align: center;
+}
+
+.drop-zone input {
+  display: none;
+}
+
+.drop-zone strong {
+  font-size: 1.35rem;
+}
+
+.upload-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.upload-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(17, 19, 15, 0.12);
+  border-radius: 6px;
+  background: #fffdf8;
+}
+
+.upload-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  color: #60685b;
+}
+
+.upload-status.done {
+  color: #2f6b4f;
+}
+
+.upload-status.error {
+  color: #a44a3f;
+}
+
+.progress-track {
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(17, 19, 15, 0.08);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: #d9a441;
+  transition: width 160ms ease;
+}
+
+.closed-panel {
+  width: min(520px, 100%);
+  border-radius: 8px;
+  padding: 32px;
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-panel {
+    min-height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-shell {
+    padding: 12px;
+  }
+
+  .admin-topbar,
+  .detail-header,
+  .file-toolbar,
+  .file-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .field-row,
+  .share-block {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-heading {
+    flex-direction: column;
+  }
+}
