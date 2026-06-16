@@ -22,6 +22,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Zener</title>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("zener-theme");
+          if (m === "light" || m === "dark") {
+            document.documentElement.setAttribute("data-theme", m);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
