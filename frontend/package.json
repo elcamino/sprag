@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/hanken-grotesk": "^5.2.8",
     "lucide-react": "^0.468.0",
     "qrcode.react": "^4.1.0",
     "react": "^18.3.1",
