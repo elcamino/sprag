@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,28 @@ func TestSPAFallbackServesIndexWithoutRedirect(t *testing.T) {
 	}
 	if rr.Body.String() != "<div id=\"root\"></div>" {
 		t.Fatalf("unexpected body %q", rr.Body.String())
+	}
+}
+
+func TestFrontendIndexDisallowsIndexing(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "frontend", "index.html"))
+	if err != nil {
+		t.Fatalf("read frontend index: %v", err)
+	}
+	html := strings.ToLower(string(body))
+	if !strings.Contains(html, `<meta name="robots" content="noindex,nofollow"`) {
+		t.Fatalf("frontend index.html must include a robots noindex,nofollow meta tag")
+	}
+}
+
+func TestFrontendRobotsDisallowsEverything(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "frontend", "public", "robots.txt"))
+	if err != nil {
+		t.Fatalf("read frontend robots.txt: %v", err)
+	}
+	got := strings.TrimSpace(string(body))
+	want := "User-agent: *\nDisallow: /"
+	if got != want {
+		t.Fatalf("unexpected robots.txt content\nwant:\n%s\n\ngot:\n%s", want, got)
 	}
 }
