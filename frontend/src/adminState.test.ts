@@ -1,4 +1,4 @@
-// Zener - a tiny anonymous file dropbox.
+// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -15,7 +15,14 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { describe, expect, it } from "vitest";
-import { filesVisibleForSelectedPage, selectedPageForID } from "./adminState";
+import {
+  downloadUnlockPromptActive,
+  filesVisibleForSelectedPage,
+  nextDownloadUnlockPrompt,
+  privateKeyControlState,
+  selectedPageForID,
+  submitStoredPrivateKeyUnlock
+} from "./adminState";
 import { PageSummary, UploadFile } from "./api";
 
 function page(id: number, title = "encryption test"): PageSummary {
@@ -51,5 +58,49 @@ describe("admin page state", () => {
     const staleFiles = { pageID: 1, files: [upload(1, 1)] };
 
     expect(filesVisibleForSelectedPage(staleFiles, selected)).toEqual([]);
+  });
+
+  it("shows the remove-memory control when a private key is already loaded", () => {
+    expect(privateKeyControlState("  private key JSON  ")).toBe("remove-memory");
+  });
+
+  it("shows the unlock control when a private key is not loaded", () => {
+    expect(privateKeyControlState("")).toBe("unlock");
+    expect(privateKeyControlState(undefined)).toBe("unlock");
+  });
+
+  it("submits stored-key unlock without navigating away", () => {
+    const selected = page(2);
+    let defaultPrevented = false;
+    let unlockedPage: PageSummary | null = null;
+
+    submitStoredPrivateKeyUnlock(
+      {
+        preventDefault: () => {
+          defaultPrevented = true;
+        }
+      },
+      selected,
+      (page) => {
+        unlockedPage = page;
+      }
+    );
+
+    expect(defaultPrevented).toBe(true);
+    expect(unlockedPage).toBe(selected);
+  });
+
+  it("prompts unlock for encrypted downloads when no private key is loaded", () => {
+    const firstPrompt = nextDownloadUnlockPrompt(null, 2, "");
+    const secondPrompt = nextDownloadUnlockPrompt(firstPrompt, 2, "  ");
+
+    expect(firstPrompt).toEqual({ pageID: 2, nonce: 1 });
+    expect(secondPrompt).toEqual({ pageID: 2, nonce: 2 });
+    expect(downloadUnlockPromptActive(secondPrompt, 2)).toBe(true);
+    expect(downloadUnlockPromptActive(secondPrompt, 3)).toBe(false);
+  });
+
+  it("does not prompt unlock for encrypted downloads when a private key is loaded", () => {
+    expect(nextDownloadUnlockPrompt(null, 2, "private key JSON")).toBeNull();
   });
 });

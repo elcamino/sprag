@@ -14,16 +14,30 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package zener
+package s3store
 
 import (
-	"embed"
-	"io/fs"
+	"strings"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-//go:embed all:frontend/dist
-var frontendDist embed.FS
+func TestUploadInputRequestsStoredChecksum(t *testing.T) {
+	input := uploadInput("bucket", "object-key", strings.NewReader("payload"), "text/plain")
 
-func FrontendFS() (fs.FS, error) {
-	return fs.Sub(frontendDist, "frontend/dist")
+	if input.ChecksumAlgorithm != types.ChecksumAlgorithmCrc32 {
+		t.Fatalf("expected CRC32 checksum algorithm, got %q", input.ChecksumAlgorithm)
+	}
+	if input.ContentType == nil || *input.ContentType != "text/plain" {
+		t.Fatalf("expected content type to be preserved, got %v", input.ContentType)
+	}
+}
+
+func TestDownloadInputRequestsChecksumValidation(t *testing.T) {
+	input := downloadInput("bucket", "object-key")
+
+	if input.ChecksumMode != types.ChecksumModeEnabled {
+		t.Fatalf("expected checksum validation mode enabled, got %q", input.ChecksumMode)
+	}
 }

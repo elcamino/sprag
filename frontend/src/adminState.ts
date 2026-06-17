@@ -1,4 +1,4 @@
-// Zener - a tiny anonymous file dropbox.
+// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,13 @@ export type LoadedFiles = {
   files: UploadFile[];
 } | null;
 
+export type PrivateKeyControlState = "unlock" | "remove-memory";
+
+export type DownloadUnlockPrompt = {
+  pageID: number;
+  nonce: number;
+};
+
 export function selectedPageForID(pages: PageSummary[], selectedID: number | null): PageSummary | null {
   if (selectedID === null) {
     return pages[0] ?? null;
@@ -33,4 +40,35 @@ export function filesVisibleForSelectedPage(loadedFiles: LoadedFiles, selected: 
     return [];
   }
   return loadedFiles.files;
+}
+
+export function privateKeyControlState(loadedPrivateKey?: string): PrivateKeyControlState {
+  return loadedPrivateKey?.trim() ? "remove-memory" : "unlock";
+}
+
+export function submitStoredPrivateKeyUnlock<T>(
+  event: { preventDefault(): void },
+  page: T,
+  unlock: (page: T) => void | Promise<void>
+): void {
+  event.preventDefault();
+  void unlock(page);
+}
+
+export function nextDownloadUnlockPrompt(
+  current: DownloadUnlockPrompt | null,
+  pageID: number,
+  loadedPrivateKey?: string
+): DownloadUnlockPrompt | null {
+  if (loadedPrivateKey?.trim()) {
+    return null;
+  }
+  return {
+    pageID,
+    nonce: (current?.nonce ?? 0) + 1
+  };
+}
+
+export function downloadUnlockPromptActive(prompt: DownloadUnlockPrompt | null, pageID: number): boolean {
+  return prompt?.pageID === pageID;
 }

@@ -1,4 +1,4 @@
-// Zener - a tiny anonymous file dropbox.
+// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -78,23 +78,13 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 }
 
 func (s *Store) Upload(ctx context.Context, key string, body io.Reader, contentType string) error {
-	input := &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-		Body:   body,
-	}
-	if contentType != "" {
-		input.ContentType = aws.String(contentType)
-	}
+	input := uploadInput(s.bucket, key, body, contentType)
 	_, err := s.uploader.Upload(ctx, input)
 	return err
 }
 
 func (s *Store) Download(ctx context.Context, key string) (io.ReadCloser, error) {
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	})
+	out, err := s.client.GetObject(ctx, downloadInput(s.bucket, key))
 	if err != nil {
 		var noKey *types.NoSuchKey
 		if errors.As(err, &noKey) {
@@ -103,6 +93,27 @@ func (s *Store) Download(ctx context.Context, key string) (io.ReadCloser, error)
 		return nil, err
 	}
 	return out.Body, nil
+}
+
+func uploadInput(bucket string, key string, body io.Reader, contentType string) *s3.PutObjectInput {
+	input := &s3.PutObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(key),
+		Body:              body,
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	}
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+	return input
+}
+
+func downloadInput(bucket string, key string) *s3.GetObjectInput {
+	return &s3.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(key),
+		ChecksumMode: types.ChecksumModeEnabled,
+	}
 }
 
 func (s *Store) Delete(ctx context.Context, key string) error {

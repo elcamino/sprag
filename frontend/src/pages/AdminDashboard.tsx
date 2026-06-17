@@ -1,4 +1,4 @@
-// Zener - a tiny anonymous file dropbox.
+// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,16 @@ import {
   UploadCloud
 } from "lucide-react";
 import { api, CreatedPage, E2EConfig, formatBytes, formatDate, PageSummary, UploadFile } from "../api";
-import { filesVisibleForSelectedPage, LoadedFiles, selectedPageForID } from "../adminState";
+import {
+  DownloadUnlockPrompt,
+  downloadUnlockPromptActive,
+  filesVisibleForSelectedPage,
+  LoadedFiles,
+  nextDownloadUnlockPrompt,
+  privateKeyControlState,
+  selectedPageForID,
+  submitStoredPrivateKeyUnlock
+} from "../adminState";
 import {
   E2E_ALGORITHM,
   decryptEncryptedUpload,
@@ -39,7 +48,7 @@ import {
   parsePrivateIdentity,
   publicIdentityFromPrivate
 } from "../e2eCrypto";
-import { loadStoredPrivateKey, saveStoredPrivateKey, storedPrivateKeyExists } from "../e2eKeyStore";
+import { loadStoredPrivateKey, saveStoredPrivateKey } from "../e2eKeyStore";
 import { ThemeSwitch } from "../ThemeSwitch";
 
 type PageForm = {
@@ -75,13 +84,16 @@ export default function AdminDashboard() {
   const [newPageKeyPassphrase, setNewPageKeyPassphrase] = useState("");
   const [newPageKeyPassphraseConfirm, setNewPageKeyPassphraseConfirm] = useState("");
   const [pagePrivateKeys, setPagePrivateKeys] = useState<Record<number, string>>({});
-  const [storedBrowserKeys, setStoredBrowserKeys] = useState<Record<number, boolean>>({});
   const [storedBrowserKeyPassphrases, setStoredBrowserKeyPassphrases] = useState<Record<number, string>>({});
+  const [downloadUnlockPrompt, setDownloadUnlockPrompt] = useState<DownloadUnlockPrompt | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(() => selectedPageForID(pages, selectedID), [pages, selectedID]);
   const files = useMemo(() => filesVisibleForSelectedPage(loadedFiles, selected), [loadedFiles, selected]);
+  const selectedPrivateKey = selected ? (pagePrivateKeys[selected.id] ?? "") : "";
+  const selectedStoredKeyControl = privateKeyControlState(selectedPrivateKey);
+  const selectedDownloadUnlockPrompt = selected ? downloadUnlockPromptActive(downloadUnlockPrompt, selected.id) : false;
 
   const loadPages = useCallback(async () => {
     const data = await api<PageSummary[]>("/api/admin/pages");
@@ -115,13 +127,6 @@ export default function AdminDashboard() {
       setLoadedFiles(null);
     }
   }, [loadFiles, selected]);
-
-  useEffect(() => {
-    if (!selected?.e2e_enabled || !selected.e2e_public_key_fingerprint) return;
-    storedPrivateKeyExists({ pageID: selected.id, fingerprint: selected.e2e_public_key_fingerprint })
-      .then((exists) => setStoredBrowserKeys((current) => ({ ...current, [selected.id]: exists })))
-      .catch(() => setStoredBrowserKeys((current) => ({ ...current, [selected.id]: false })));
-  }, [selected]);
 
   async function createPage(event: FormEvent) {
     event.preventDefault();
@@ -176,7 +181,6 @@ export default function AdminDashboard() {
             privateKey: privateKeyForPage,
             passphrase: newPageKeyPassphrase
           });
-          setStoredBrowserKeys((current) => ({ ...current, [page.id]: true }));
         } catch (err) {
           storageError = err instanceof Error ? err.message : "Could not store private key in this browser";
         }
@@ -290,13 +294,28 @@ export default function AdminDashboard() {
     }
   }
 
+  function removePrivateKeyFromMemory(page: PageSummary) {
+    setError("");
+    setPagePrivateKeys((current) => {
+      const next = { ...current };
+      delete next[page.id];
+      return next;
+    });
+    setStoredBrowserKeyPassphrases((current) => {
+      const next = { ...current };
+      delete next[page.id];
+      return next;
+    });
+  }
+
   async function downloadEncryptedFile(file: UploadFile) {
     if (!selected || !file.encryption_envelope) return;
     setError("");
     try {
       const rawKey = pagePrivateKeys[selected.id] ?? "";
       if (!rawKey.trim()) {
-        throw new Error("Private key required");
+        setDownloadUnlockPrompt((current) => nextDownloadUnlockPrompt(current, selected.id, rawKey));
+        return;
       }
       const privateIdentity = parsePrivateIdentity(rawKey);
       const response = await fetch(`/api/admin/pages/${selected.id}/files/${file.id}`, {
@@ -521,36 +540,68 @@ export default function AdminDashboard() {
                     <p className="eyebrow">Encrypted Files</p>
                     <strong>{selected.e2e_public_key_fingerprint}</strong>
                   </div>
-                  {storedBrowserKeys[selected.id] && (
-                    <div className="e2e-store-warning">
+                  {selectedStoredKeyControl === "unlock" && (
+                    <div
+                      key={`unlock-${selected.id}-${selectedDownloadUnlockPrompt ? downloadUnlockPrompt?.nonce : 0}`}
+                      className={`e2e-store-warning ${selectedDownloadUnlockPrompt ? "attention" : ""}`}
+                    >
+                      {selectedDownloadUnlockPrompt && (
+                        <p className="e2e-download-notice" role="status">
+                          Downloading this encrypted file requires unlocking the stored key or pasting the private key.
+                        </p>
+                      )}
                       <p>
-                        A passphrase-protected private key is stored in this browser. Enter the passphrase to unlock it
-                        for this session; the passphrase is not saved.
+                        Enter the stored-key passphrase to unlock the private key for this session; the passphrase is
+                        not saved.
                       </p>
-                      <div className="e2e-unlock-row">
+                      <form
+                        className="e2e-unlock-row"
+                        onSubmit={(event) => submitStoredPrivateKeyUnlock(event, selected, unlockStoredBrowserKey)}
+                      >
                         <label>
                           <span>Stored key passphrase</span>
                           <input
                             type="password"
                             value={storedBrowserKeyPassphrases[selected.id] ?? ""}
                             onChange={(event) =>
-                              setStoredBrowserKeyPassphrases((current) => ({ ...current, [selected.id]: event.target.value }))
+                              setStoredBrowserKeyPassphrases((current) => ({
+                                ...current,
+                                [selected.id]: event.target.value
+                              }))
                             }
                             autoComplete="current-password"
                           />
                         </label>
-                        <button type="button" className="secondary-action" onClick={() => unlockStoredBrowserKey(selected)}>
+                        <button type="submit" className="secondary-action">
                           <KeyRound size={17} />
                           Unlock
                         </button>
-                      </div>
+                      </form>
+                    </div>
+                  )}
+                  {selectedStoredKeyControl === "remove-memory" && (
+                    <div className="e2e-store-warning">
+                      <p>
+                        A private key is loaded for this session. Remove it from memory to require the stored-key
+                        passphrase again.
+                      </p>
+                      <button
+                        type="button"
+                        className="secondary-action danger e2e-memory-action"
+                        onClick={() => removePrivateKeyFromMemory(selected)}
+                      >
+                        <Trash2 size={17} />
+                        Remove Key from Memory
+                      </button>
                     </div>
                   )}
                   <label>
                     <span>Private key</span>
                     <textarea
-                      value={pagePrivateKeys[selected.id] ?? ""}
-                      onChange={(event) => setPagePrivateKeys((current) => ({ ...current, [selected.id]: event.target.value }))}
+                      value={selectedPrivateKey}
+                      onChange={(event) =>
+                        setPagePrivateKeys((current) => ({ ...current, [selected.id]: event.target.value }))
+                      }
                       spellCheck={false}
                       placeholder="Paste private key JSON"
                     />
