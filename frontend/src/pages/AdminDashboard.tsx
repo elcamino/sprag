@@ -20,14 +20,26 @@ import {
   Archive,
   Copy,
   Download,
+  FileKey2,
   FileDown,
+  KeyRound,
   LogOut,
   Plus,
   RefreshCw,
   Trash2,
   UploadCloud
 } from "lucide-react";
-import { api, CreatedPage, formatBytes, formatDate, PageSummary, UploadFile } from "../api";
+import { api, CreatedPage, E2EConfig, formatBytes, formatDate, PageSummary, UploadFile } from "../api";
+import { filesVisibleForSelectedPage, LoadedFiles, selectedPageForID } from "../adminState";
+import {
+  E2E_ALGORITHM,
+  decryptEncryptedUpload,
+  exportPrivateIdentity,
+  generateE2EIdentity,
+  parsePrivateIdentity,
+  publicIdentityFromPrivate
+} from "../e2eCrypto";
+import { loadStoredPrivateKey, saveStoredPrivateKey, storedPrivateKeyExists } from "../e2eKeyStore";
 import { ThemeSwitch } from "../ThemeSwitch";
 
 type PageForm = {
@@ -37,6 +49,7 @@ type PageForm = {
   max_file_size: string;
   allowed_ext: string;
   expires_at: string;
+  e2e_enabled: boolean;
 };
 
 const emptyForm: PageForm = {
@@ -45,31 +58,44 @@ const emptyForm: PageForm = {
   pin: "",
   max_file_size: "",
   allowed_ext: "",
-  expires_at: ""
+  expires_at: "",
+  e2e_enabled: false
 };
 
 export default function AdminDashboard() {
   const [pages, setPages] = useState<PageSummary[]>([]);
   const [selectedID, setSelectedID] = useState<number | null>(null);
-  const [files, setFiles] = useState<UploadFile[]>([]);
+  const [loadedFiles, setLoadedFiles] = useState<LoadedFiles>(null);
   const [form, setForm] = useState<PageForm>(emptyForm);
   const [created, setCreated] = useState<CreatedPage | null>(null);
+  const [e2eConfig, setE2EConfig] = useState<E2EConfig | null>(null);
+  const [newPagePrivateKey, setNewPagePrivateKey] = useState("");
+  const [newPageKeyCopied, setNewPageKeyCopied] = useState(false);
+  const [storeNewPageKey, setStoreNewPageKey] = useState(false);
+  const [newPageKeyPassphrase, setNewPageKeyPassphrase] = useState("");
+  const [newPageKeyPassphraseConfirm, setNewPageKeyPassphraseConfirm] = useState("");
+  const [pagePrivateKeys, setPagePrivateKeys] = useState<Record<number, string>>({});
+  const [storedBrowserKeys, setStoredBrowserKeys] = useState<Record<number, boolean>>({});
+  const [storedBrowserKeyPassphrases, setStoredBrowserKeyPassphrases] = useState<Record<number, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const selected = useMemo(() => pages.find((page) => page.id === selectedID) ?? pages[0], [pages, selectedID]);
+  const selected = useMemo(() => selectedPageForID(pages, selectedID), [pages, selectedID]);
+  const files = useMemo(() => filesVisibleForSelectedPage(loadedFiles, selected), [loadedFiles, selected]);
 
   const loadPages = useCallback(async () => {
     const data = await api<PageSummary[]>("/api/admin/pages");
     setPages(data);
-    if (!selectedID && data.length > 0) {
-      setSelectedID(data[0].id);
-    }
-  }, [selectedID]);
+    setSelectedID((current) => {
+      if (data.length === 0) return null;
+      if (current !== null && data.some((page) => page.id === current)) return current;
+      return data[0].id;
+    });
+  }, []);
 
   const loadFiles = useCallback(async (pageID: number) => {
     const data = await api<UploadFile[]>(`/api/admin/pages/${pageID}/files`);
-    setFiles(data);
+    setLoadedFiles({ pageID, files: data });
   }, []);
 
   useEffect(() => {
@@ -77,34 +103,97 @@ export default function AdminDashboard() {
   }, [loadPages]);
 
   useEffect(() => {
+    api<E2EConfig>("/api/admin/e2e")
+      .then(setE2EConfig)
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load E2E config"));
+  }, []);
+
+  useEffect(() => {
     if (selected) {
       loadFiles(selected.id).catch((err) => setError(err instanceof Error ? err.message : "Could not load files"));
     } else {
-      setFiles([]);
+      setLoadedFiles(null);
     }
   }, [loadFiles, selected]);
+
+  useEffect(() => {
+    if (!selected?.e2e_enabled || !selected.e2e_public_key_fingerprint) return;
+    storedPrivateKeyExists({ pageID: selected.id, fingerprint: selected.e2e_public_key_fingerprint })
+      .then((exists) => setStoredBrowserKeys((current) => ({ ...current, [selected.id]: exists })))
+      .catch(() => setStoredBrowserKeys((current) => ({ ...current, [selected.id]: false })));
+  }, [selected]);
 
   async function createPage(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
+      const e2eSelected = Boolean(e2eConfig?.enabled && (e2eConfig.required || form.e2e_enabled));
+      let privateKeyForPage = "";
+      let privateKeyFingerprint = "";
+      let e2ePayload = {};
+      if (e2eSelected) {
+        const identity = parsePrivateIdentity(newPagePrivateKey);
+        const publicIdentity = publicIdentityFromPrivate(identity);
+        if (publicIdentity.algorithm !== (e2eConfig?.algorithm || E2E_ALGORITHM)) {
+          throw new Error("Private key algorithm does not match server E2E config");
+        }
+        if (storeNewPageKey) {
+          if (!newPageKeyPassphrase) {
+            throw new Error("Passphrase required to store the private key in this browser");
+          }
+          if (newPageKeyPassphrase !== newPageKeyPassphraseConfirm) {
+            throw new Error("Stored key passphrases do not match");
+          }
+        }
+        privateKeyForPage = exportPrivateIdentity(identity);
+        privateKeyFingerprint = publicIdentity.fingerprint;
+        e2ePayload = {
+          e2e_public_key: JSON.stringify(publicIdentity),
+          e2e_public_key_fingerprint: publicIdentity.fingerprint,
+          e2e_algorithm: publicIdentity.algorithm
+        };
+      }
       const payload = {
         title: form.title,
         description: form.description,
         pin: form.pin,
         max_file_size: form.max_file_size ? Number(form.max_file_size) : undefined,
         allowed_ext: form.allowed_ext,
-        expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : ""
+        expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : "",
+        ...e2ePayload
       };
       const page = await api<CreatedPage>("/api/admin/pages", {
         method: "POST",
         body: JSON.stringify(payload)
       });
+      let storageError = "";
+      if (privateKeyForPage && storeNewPageKey) {
+        try {
+          await saveStoredPrivateKey({
+            pageID: page.id,
+            fingerprint: page.e2e_public_key_fingerprint || privateKeyFingerprint,
+            privateKey: privateKeyForPage,
+            passphrase: newPageKeyPassphrase
+          });
+          setStoredBrowserKeys((current) => ({ ...current, [page.id]: true }));
+        } catch (err) {
+          storageError = err instanceof Error ? err.message : "Could not store private key in this browser";
+        }
+      }
       setCreated(page);
       setForm(emptyForm);
+      setStoreNewPageKey(false);
+      setNewPageKeyPassphrase("");
+      setNewPageKeyPassphraseConfirm("");
+      if (privateKeyForPage) {
+        setPagePrivateKeys((current) => ({ ...current, [page.id]: privateKeyForPage }));
+      }
       await loadPages();
       setSelectedID(page.id);
+      if (storageError) {
+        setError(`Page created, but browser key storage failed: ${storageError}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create page");
     } finally {
@@ -123,8 +212,15 @@ export default function AdminDashboard() {
   async function deletePage(page: PageSummary, filesToo: boolean) {
     if (!window.confirm(filesToo ? "Delete this page and all files?" : "Delete this page?")) return;
     await api<void>(`/api/admin/pages/${page.id}${filesToo ? "?files=1" : ""}`, { method: "DELETE" });
+    setPages((current) => current.filter((candidate) => candidate.id !== page.id));
     setSelectedID(null);
     setCreated(null);
+    setLoadedFiles(null);
+    setStoredBrowserKeyPassphrases((current) => {
+      const next = { ...current };
+      delete next[page.id];
+      return next;
+    });
     await loadPages();
   }
 
@@ -138,6 +234,82 @@ export default function AdminDashboard() {
   async function logout() {
     await api("/api/admin/logout", { method: "POST" });
     window.location.assign("/admin");
+  }
+
+  async function generateNewPageKey() {
+    setError("");
+    setBusy(true);
+    try {
+      const identity = await generateE2EIdentity();
+      setNewPagePrivateKey(exportPrivateIdentity(identity));
+      setForm((current) => ({ ...current, e2e_enabled: true }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not generate key");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyNewPagePrivateKey() {
+    if (!newPagePrivateKey) return;
+    await navigator.clipboard.writeText(newPagePrivateKey);
+    setNewPageKeyCopied(true);
+    window.setTimeout(() => setNewPageKeyCopied(false), 1400);
+  }
+
+  async function handleNewPageKeyAction() {
+    setError("");
+    try {
+      if (newPagePrivateKey.trim()) {
+        await copyNewPagePrivateKey();
+        return;
+      }
+      await generateNewPageKey();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not copy private key");
+    }
+  }
+
+  async function unlockStoredBrowserKey(page: PageSummary) {
+    if (!page.e2e_public_key_fingerprint) return;
+    setError("");
+    try {
+      const passphrase = storedBrowserKeyPassphrases[page.id] ?? "";
+      const privateKey = await loadStoredPrivateKey({
+        pageID: page.id,
+        fingerprint: page.e2e_public_key_fingerprint,
+        passphrase
+      });
+      if (!privateKey) {
+        throw new Error("No private key is stored in this browser for this page");
+      }
+      setPagePrivateKeys((current) => ({ ...current, [page.id]: privateKey }));
+      setStoredBrowserKeyPassphrases((current) => ({ ...current, [page.id]: "" }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not unlock stored private key");
+    }
+  }
+
+  async function downloadEncryptedFile(file: UploadFile) {
+    if (!selected || !file.encryption_envelope) return;
+    setError("");
+    try {
+      const rawKey = pagePrivateKeys[selected.id] ?? "";
+      if (!rawKey.trim()) {
+        throw new Error("Private key required");
+      }
+      const privateIdentity = parsePrivateIdentity(rawKey);
+      const response = await fetch(`/api/admin/pages/${selected.id}/files/${file.id}`, {
+        credentials: "include"
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      const decrypted = await decryptEncryptedUpload(await response.arrayBuffer(), file.encryption_envelope, privateIdentity);
+      downloadBlob(decrypted.blob, decrypted.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not decrypt file");
+    }
   }
 
   return (
@@ -205,6 +377,93 @@ export default function AdminDashboard() {
                 />
               </label>
             </div>
+            {e2eConfig?.enabled && (
+              <div className="e2e-page-controls">
+                <div className="e2e-choice-row">
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={e2eConfig.required || form.e2e_enabled}
+                      disabled={e2eConfig.required}
+                      onChange={(event) => {
+                        setForm({ ...form, e2e_enabled: event.target.checked });
+                        if (!event.target.checked) setStoreNewPageKey(false);
+                      }}
+                    />
+                    <span>Encrypt Files</span>
+                  </label>
+                  {newPagePrivateKey.trim() && (e2eConfig.required || form.e2e_enabled) && (
+                    <label className="check-field">
+                      <input
+                        type="checkbox"
+                        checked={storeNewPageKey}
+                        onChange={(event) => {
+                          setStoreNewPageKey(event.target.checked);
+                          if (!event.target.checked) {
+                            setNewPageKeyPassphrase("");
+                            setNewPageKeyPassphraseConfirm("");
+                          }
+                        }}
+                      />
+                      <span>Store encrypted in this browser</span>
+                    </label>
+                  )}
+                </div>
+                {(e2eConfig.required || form.e2e_enabled) && (
+                  <>
+                    <button type="button" className="secondary-action" onClick={handleNewPageKeyAction} disabled={busy}>
+                      {newPagePrivateKey.trim() ? <Copy size={17} /> : <KeyRound size={17} />}
+                      {newPagePrivateKey.trim() ? (newPageKeyCopied ? "Copied" : "Copy") : "Generate key"}
+                    </button>
+                    <label>
+                      <span>Private key</span>
+                      <textarea
+                        value={newPagePrivateKey}
+                        onChange={(event) => {
+                          setNewPagePrivateKey(event.target.value);
+                          if (!event.target.value.trim()) {
+                            setStoreNewPageKey(false);
+                            setNewPageKeyPassphrase("");
+                            setNewPageKeyPassphraseConfirm("");
+                          }
+                        }}
+                        spellCheck={false}
+                        placeholder="Paste private key JSON"
+                      />
+                    </label>
+                    {storeNewPageKey && (
+                      <div className="e2e-store-warning">
+                        <p>
+                          The private key is encrypted in IndexedDB with this passphrase. This is safer than keeping an
+                          unencrypted downloaded key, but weaker than a password manager or offline backup and still
+                          exposed to compromised admin-page scripts after unlock.
+                        </p>
+                        <div className="field-row">
+                          <label>
+                            <span>Storage passphrase</span>
+                            <input
+                              type="password"
+                              value={newPageKeyPassphrase}
+                              onChange={(event) => setNewPageKeyPassphrase(event.target.value)}
+                              autoComplete="new-password"
+                            />
+                          </label>
+                          <label>
+                            <span>Confirm passphrase</span>
+                            <input
+                              type="password"
+                              value={newPageKeyPassphraseConfirm}
+                              onChange={(event) => setNewPageKeyPassphraseConfirm(event.target.value)}
+                              autoComplete="new-password"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {error && <p className="error-line">{error}</p>}
             <button className="primary-action" disabled={busy}>
               <Plus size={18} />
@@ -224,6 +483,7 @@ export default function AdminDashboard() {
                   <strong>{page.title}</strong>
                   <small>
                     {page.upload_count} files · {formatBytes(page.total_bytes)}
+                    {page.e2e_enabled ? " · E2E" : ""}
                   </small>
                 </span>
               </button>
@@ -255,30 +515,82 @@ export default function AdminDashboard() {
 
               <ShareBlock page={created?.id === selected.id ? created : null} fallbackSlug={selected.slug} />
 
+              {selected.e2e_enabled && (
+                <div className="e2e-key-panel">
+                  <div>
+                    <p className="eyebrow">Encrypted Files</p>
+                    <strong>{selected.e2e_public_key_fingerprint}</strong>
+                  </div>
+                  {storedBrowserKeys[selected.id] && (
+                    <div className="e2e-store-warning">
+                      <p>
+                        A passphrase-protected private key is stored in this browser. Enter the passphrase to unlock it
+                        for this session; the passphrase is not saved.
+                      </p>
+                      <div className="e2e-unlock-row">
+                        <label>
+                          <span>Stored key passphrase</span>
+                          <input
+                            type="password"
+                            value={storedBrowserKeyPassphrases[selected.id] ?? ""}
+                            onChange={(event) =>
+                              setStoredBrowserKeyPassphrases((current) => ({ ...current, [selected.id]: event.target.value }))
+                            }
+                            autoComplete="current-password"
+                          />
+                        </label>
+                        <button type="button" className="secondary-action" onClick={() => unlockStoredBrowserKey(selected)}>
+                          <KeyRound size={17} />
+                          Unlock
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <label>
+                    <span>Private key</span>
+                    <textarea
+                      value={pagePrivateKeys[selected.id] ?? ""}
+                      onChange={(event) => setPagePrivateKeys((current) => ({ ...current, [selected.id]: event.target.value }))}
+                      spellCheck={false}
+                      placeholder="Paste private key JSON"
+                    />
+                  </label>
+                </div>
+              )}
+
               <div className="file-toolbar">
                 <h3>
                   <UploadCloud size={18} />
                   Files
                 </h3>
-                <a className="secondary-action" href={`/api/admin/pages/${selected.id}/zip`}>
-                  <FileDown size={17} />
-                  Zip
-                </a>
+                {!selected.e2e_enabled && (
+                  <a className="secondary-action" href={`/api/admin/pages/${selected.id}/zip`}>
+                    <FileDown size={17} />
+                    Zip
+                  </a>
+                )}
               </div>
 
               <div className="file-table">
                 {files.map((file) => (
                   <div className="file-row" key={file.id}>
                     <span>
-                      <strong>{file.name}</strong>
+                      <strong>{file.encryption_mode === "e2e-v1" ? "Encrypted upload" : file.name}</strong>
                       <small>
                         {formatBytes(file.size)} · {formatDate(file.uploaded_at)}
+                        {file.encryption_mode === "e2e-v1" ? " · E2E" : ""}
                       </small>
                     </span>
                     <span className="file-actions">
-                      <a className="icon-button" href={`/api/admin/pages/${selected.id}/files/${file.id}`} title="Download">
-                        <Download size={17} />
-                      </a>
+                      {file.encryption_mode === "e2e-v1" ? (
+                        <button className="icon-button" onClick={() => downloadEncryptedFile(file)} title="Decrypt and download">
+                          <FileKey2 size={17} />
+                        </button>
+                      ) : (
+                        <a className="icon-button" href={`/api/admin/pages/${selected.id}/files/${file.id}`} title="Download">
+                          <Download size={17} />
+                        </a>
+                      )}
                       <button className="icon-button danger" onClick={() => deleteFile(file)} title="Delete file">
                         <Trash2 size={17} />
                       </button>
@@ -295,6 +607,17 @@ export default function AdminDashboard() {
       </section>
     </main>
   );
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function ShareBlock({ page, fallbackSlug }: { page: CreatedPage | null; fallbackSlug: string }) {

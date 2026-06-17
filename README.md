@@ -64,6 +64,22 @@ Zener loads `.env` if present and then reads environment variables. Startup fail
 
 Admin sessions are stateless signed cookies (7-day expiry). Rotating `SESSION_SECRET` invalidates every outstanding session immediately; changing only `ADMIN_PASSWORD` does not, so rotate the secret too if you need to force existing sessions to log out.
 
+Server-blind E2E intake is controlled by `E2E_INTAKE_ENABLED`,
+`E2E_INTAKE_REQUIRED`, and `E2E_INTAKE_ALGORITHM`. The supported cryptographic
+profile is `ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM`: the uploader browser
+combines ML-KEM-1024 with P-384 ECDH, derives AES-256-GCM keys with
+HKDF-SHA-512, encrypts file bytes and metadata locally, and uploads only
+ciphertext. The server stores page public keys and encrypted upload envelopes,
+but never stores E2E private keys. Back up each generated private key; if it is
+lost, matching encrypted uploads cannot be recovered.
+
+The admin UI can optionally store a generated private key encrypted in browser
+IndexedDB. The stored value is encrypted with a passphrase that the admin
+supplies and that Zener does not save. This is safer than keeping an unencrypted
+downloaded key, but weaker than a password manager or offline backup and still
+does not protect against a compromised admin-origin script after the key is
+unlocked.
+
 ## Storage
 
 Metadata is stored in SQLite at `DB_PATH`. The database runs in WAL mode with a

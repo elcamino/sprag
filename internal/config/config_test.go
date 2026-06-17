@@ -72,6 +72,56 @@ func TestLoadFromLookupParsesTrustedProxyHops(t *testing.T) {
 	}
 }
 
+func TestLoadFromLookupParsesE2EIntakeConfig(t *testing.T) {
+	values := baseValues()
+	values["E2E_INTAKE_ENABLED"] = "true"
+	values["E2E_INTAKE_REQUIRED"] = "true"
+	values["E2E_INTAKE_ALGORITHM"] = "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM"
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+
+	if !cfg.E2EIntake.Enabled {
+		t.Fatal("expected E2E intake to be enabled")
+	}
+	if !cfg.E2EIntake.Required {
+		t.Fatal("expected E2E intake to be required")
+	}
+	if cfg.E2EIntake.Algorithm != "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM" {
+		t.Fatalf("unexpected E2E algorithm %q", cfg.E2EIntake.Algorithm)
+	}
+}
+
+func TestLoadFromLookupRejectsE2ERequiredWhenDisabled(t *testing.T) {
+	values := baseValues()
+	values["E2E_INTAKE_ENABLED"] = "false"
+	values["E2E_INTAKE_REQUIRED"] = "true"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected E2E required without E2E enabled to fail")
+	}
+	if !strings.Contains(err.Error(), "E2E_INTAKE_REQUIRED") {
+		t.Fatalf("expected E2E_INTAKE_REQUIRED error, got %q", err.Error())
+	}
+}
+
+func TestLoadFromLookupRejectsUnsupportedE2EAlgorithm(t *testing.T) {
+	values := baseValues()
+	values["E2E_INTAKE_ENABLED"] = "true"
+	values["E2E_INTAKE_ALGORITHM"] = "RSA-OAEP-AES-GCM"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected unsupported E2E algorithm to fail")
+	}
+	if !strings.Contains(err.Error(), "E2E_INTAKE_ALGORITHM") {
+		t.Fatalf("expected E2E_INTAKE_ALGORITHM error, got %q", err.Error())
+	}
+}
+
 func TestLoadFromLookupRejectsNegativeTrustedProxyHops(t *testing.T) {
 	values := baseValues()
 	values["TRUSTED_PROXY_HOPS"] = "-1"

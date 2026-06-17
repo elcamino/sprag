@@ -382,6 +382,72 @@ textarea:focus {
   gap: 12px;
 }
 
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.check-field input {
+  width: auto;
+}
+
+.e2e-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+}
+
+.e2e-page-controls,
+.e2e-key-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+
+.e2e-page-controls textarea,
+.e2e-key-panel textarea {
+  min-height: 128px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.e2e-key-panel {
+  margin: 18px 0;
+}
+
+.e2e-key-panel strong {
+  overflow-wrap: anywhere;
+}
+
+.e2e-store-warning {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.e2e-store-warning p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.e2e-unlock-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
 .page-list {
   display: grid;
   gap: 8px;

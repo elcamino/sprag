@@ -15,8 +15,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, FileUp, KeyRound, XCircle } from "lucide-react";
+import { CheckCircle2, FileKey2, FileUp, KeyRound, XCircle } from "lucide-react";
 import { api, formatBytes, PublicPage } from "../api";
+import { encryptFileForPage } from "../e2eCrypto";
 import { createTransferEstimator, formatDuration } from "../transfer";
 
 type UploadState = {
@@ -27,7 +28,7 @@ type UploadState = {
   total: number;
   progress: number;
   etaSeconds: number | null;
-  status: "queued" | "uploading" | "done" | "error";
+  status: "queued" | "encrypting" | "uploading" | "done" | "error";
   message?: string;
 };
 
@@ -89,15 +90,40 @@ export default function Upload() {
     }) satisfies UploadState);
     setUploads((current) => [...next, ...current]);
     await Promise.all(
-      accepted.map(({ file, error }, index) => (error ? Promise.resolve() : uploadFile(file, next[index].id)))
+      accepted.map(({ file, error }, index) => (error ? Promise.resolve() : prepareAndUpload(file, next[index].id)))
     );
   }
 
-  function uploadFile(file: File, id: string) {
+  async function prepareAndUpload(file: File, id: string) {
+    if (!page) return;
+    let uploadFile = file;
+    let envelope: string | undefined;
+    if (page.e2e?.enabled) {
+      setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "encrypting", message: "Encrypting in browser" } : item)));
+      try {
+        const encrypted = await encryptFileForPage(file, page.e2e);
+        uploadFile = encrypted.uploadFile;
+        envelope = encrypted.envelope;
+      } catch (err) {
+        setUploads((current) =>
+          current.map((item) =>
+            item.id === id ? { ...item, status: "error", message: err instanceof Error ? err.message : "Encryption failed" } : item
+          )
+        );
+        return;
+      }
+    }
+    await uploadFileToServer(uploadFile, id, envelope);
+  }
+
+  function uploadFileToServer(file: File, id: string, envelope?: string) {
     return new Promise<void>((resolve) => {
       const xhr = new XMLHttpRequest();
       const form = new FormData();
       const estimator = createTransferEstimator();
+      if (envelope) {
+        form.append("e2e_envelope", envelope);
+      }
       form.append("file", file);
       xhr.open("POST", `/api/u/${slug}`);
       xhr.withCredentials = true;
@@ -131,7 +157,7 @@ export default function Upload() {
         setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "error", message: "Network error" } : item)));
         resolve();
       };
-      setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "uploading" } : item)));
+      setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "uploading", message: undefined } : item)));
       xhr.send(form);
     });
   }
@@ -187,7 +213,7 @@ export default function Upload() {
               onDrop={drop}
               onClick={() => inputRef.current?.click()}
             >
-              <FileUp size={42} />
+              {page.e2e?.enabled ? <FileKey2 size={42} /> : <FileUp size={42} />}
               <strong>Select files</strong>
               <small>
                 Limit {formatBytes(page.max_size)}
@@ -205,7 +231,13 @@ export default function Upload() {
                   <span className={`upload-status ${upload.status}`}>
                     <span className="upload-status-line">
                       {upload.status === "done" ? <CheckCircle2 size={18} /> : upload.status === "error" ? <XCircle size={18} /> : null}
-                      {upload.status === "done" ? "Uploaded" : upload.status === "error" ? "Rejected" : `${upload.progress}%`}
+                      {upload.status === "done"
+                        ? "Uploaded"
+                        : upload.status === "error"
+                          ? "Rejected"
+                          : upload.status === "encrypting"
+                            ? "Encrypting"
+                            : `${upload.progress}%`}
                     </span>
                     {upload.status === "uploading" && upload.etaSeconds !== null && (
                       <small className="upload-eta">{formatDuration(upload.etaSeconds)} left</small>
@@ -230,6 +262,9 @@ function uploadDetail(upload: UploadState): string {
   }
   if (upload.status === "uploading") {
     return `${formatBytes(upload.loaded)} / ${formatBytes(upload.total)}`;
+  }
+  if (upload.status === "encrypting") {
+    return "Encrypting before upload";
   }
   return formatBytes(upload.size);
 }

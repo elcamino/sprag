@@ -254,6 +254,144 @@ func TestUploadEnforcesGlobalExtensionCeiling(t *testing.T) {
 	}
 }
 
+func TestE2EPagePublishesPublicKeyAndStoresEncryptedUploadMetadata(t *testing.T) {
+	handler, blobs := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.E2EIntake.Enabled = true
+		c.E2EIntake.Algorithm = "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM"
+	})
+	session := loginAdmin(t, handler)
+
+	create := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{
+		"title":                      "Encrypted intake",
+		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key_fingerprint": "sha256:test",
+		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
+	}, session, csrfHeader())
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create encrypted page status = %d body=%s", create.Code, create.Body.String())
+	}
+	var page struct {
+		ID                      int64  `json:"id"`
+		URL                     string `json:"url"`
+		E2EPublicKey            string `json:"e2e_public_key"`
+		E2EPublicKeyFingerprint string `json:"e2e_public_key_fingerprint"`
+		E2EAlgorithm            string `json:"e2e_algorithm"`
+	}
+	decodeJSON(t, create.Body.Bytes(), &page)
+	if page.E2EPublicKey == "" || page.E2EPublicKeyFingerprint != "sha256:test" {
+		t.Fatalf("encrypted page did not return its public identity: %#v", page)
+	}
+	slug := page.URL[strings.LastIndex(page.URL, "/")+1:]
+
+	meta := perform(t, handler, http.MethodGet, "/api/u/"+slug, nil, nil, nil)
+	if meta.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d body=%s", meta.Code, meta.Body.String())
+	}
+	var public struct {
+		E2E *struct {
+			Enabled              bool   `json:"enabled"`
+			Algorithm            string `json:"algorithm"`
+			PublicKey            string `json:"public_key"`
+			PublicKeyFingerprint string `json:"public_key_fingerprint"`
+		} `json:"e2e"`
+	}
+	decodeJSON(t, meta.Body.Bytes(), &public)
+	if public.E2E == nil || !public.E2E.Enabled || public.E2E.PublicKeyFingerprint != "sha256:test" {
+		t.Fatalf("public metadata missing E2E identity: %s", meta.Body.String())
+	}
+
+	envelope := `{"version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","public_key_fingerprint":"sha256:test","kem_ciphertext":"Y3Q","ecdh_ephemeral_public_key":"e30","salt":"c2FsdA","file_nonce":"ZmlsZQ","metadata_nonce":"bWV0YQ","encrypted_metadata":"c2VhbGVk"}`
+	upload := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"e2e_envelope": envelope,
+	}, "file", "privileged-report.pdf", []byte("ciphertext"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("encrypted upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+	for key := range blobs.objects {
+		if strings.Contains(key, "privileged-report.pdf") {
+			t.Fatalf("object key leaked plaintext filename: %q", key)
+		}
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	if strings.Contains(files.Body.String(), "privileged-report.pdf") {
+		t.Fatalf("file list leaked plaintext filename: %s", files.Body.String())
+	}
+	if !strings.Contains(files.Body.String(), `"encryption_mode":"e2e-v1"`) || !strings.Contains(files.Body.String(), `"encryption_envelope"`) {
+		t.Fatalf("file list missing encrypted upload envelope: %s", files.Body.String())
+	}
+}
+
+func TestE2ERequiredRejectsPlainPagesAndPlainUploads(t *testing.T) {
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.E2EIntake.Enabled = true
+		c.E2EIntake.Required = true
+		c.E2EIntake.Algorithm = "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM"
+	})
+	session := loginAdmin(t, handler)
+
+	plainPage := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{
+		"title": "Plain",
+	}, session, csrfHeader())
+	if plainPage.Code != http.StatusBadRequest {
+		t.Fatalf("plain page status = %d body=%s, want 400", plainPage.Code, plainPage.Body.String())
+	}
+	if !strings.Contains(plainPage.Body.String(), "e2e_required") {
+		t.Fatalf("expected e2e_required error, got %s", plainPage.Body.String())
+	}
+
+	slug := createPageSlug(t, handler, session, map[string]any{
+		"title":                      "Encrypted",
+		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key_fingerprint": "sha256:test",
+		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
+	})
+	plainUpload := performMultipart(t, handler, "/api/u/"+slug, "file", "secret.pdf", []byte("plaintext"), nil)
+	if plainUpload.Code != http.StatusBadRequest {
+		t.Fatalf("plain upload status = %d body=%s, want 400", plainUpload.Code, plainUpload.Body.String())
+	}
+	if !strings.Contains(plainUpload.Body.String(), "e2e_required") {
+		t.Fatalf("expected e2e_required error, got %s", plainUpload.Body.String())
+	}
+}
+
+func TestE2EDisabledRejectsEncryptedPageIdentity(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+
+	create := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{
+		"title":                      "Encrypted",
+		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key_fingerprint": "sha256:test",
+		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
+	}, session, csrfHeader())
+	if create.Code != http.StatusBadRequest {
+		t.Fatalf("encrypted page while disabled status = %d body=%s, want 400", create.Code, create.Body.String())
+	}
+	if !strings.Contains(create.Body.String(), "e2e_disabled") {
+		t.Fatalf("expected e2e_disabled error, got %s", create.Body.String())
+	}
+}
+
+func TestListFilesForDeletedPageReturnsNotFound(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	createPageSlug(t, handler, session, map[string]any{"title": "encryption test"})
+
+	deletePage := perform(t, handler, http.MethodDelete, "/api/admin/pages/1", nil, session, csrfHeader())
+	if deletePage.Code != http.StatusNoContent {
+		t.Fatalf("delete page status = %d body=%s", deletePage.Code, deletePage.Body.String())
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusNotFound {
+		t.Fatalf("files for deleted page status = %d body=%s, want 404", files.Code, files.Body.String())
+	}
+}
+
 func TestExpiredPageRejectsAccess(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	session := loginAdmin(t, handler)
@@ -483,9 +621,18 @@ func performJSON(t *testing.T, h http.Handler, method, path string, body any, co
 }
 
 func performMultipart(t *testing.T, h http.Handler, path, field, filename string, content []byte, cookies []*http.Cookie) *httptest.ResponseRecorder {
+	return performMultipartFields(t, h, path, nil, field, filename, content, cookies)
+}
+
+func performMultipartFields(t *testing.T, h http.Handler, path string, fields map[string]string, field, filename string, content []byte, cookies []*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	for name, value := range fields {
+		if err := mw.WriteField(name, value); err != nil {
+			t.Fatalf("WriteField %s: %v", name, err)
+		}
+	}
 	part, err := mw.CreateFormFile(field, filename)
 	if err != nil {
 		t.Fatalf("CreateFormFile: %v", err)

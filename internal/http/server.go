@@ -18,6 +18,7 @@ package httpapi
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -39,6 +40,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/tob/zener/internal/blob"
+	"github.com/tob/zener/internal/e2e"
 	"github.com/tob/zener/internal/ids"
 	"github.com/tob/zener/internal/store"
 	"golang.org/x/crypto/bcrypt"
@@ -65,6 +67,13 @@ type Config struct {
 	S3Prefix          string
 	SecureCookies     bool
 	TrustedProxyHops  int
+	E2EIntake         E2EConfig
+}
+
+type E2EConfig struct {
+	Enabled   bool
+	Required  bool
+	Algorithm string
 }
 
 type Dependencies struct {
@@ -103,6 +112,17 @@ func New(deps Dependencies) (http.Handler, error) {
 	if deps.Config.MaxFileSize <= 0 {
 		return nil, fmt.Errorf("max file size must be positive")
 	}
+	if deps.Config.E2EIntake.Enabled {
+		if deps.Config.E2EIntake.Algorithm == "" {
+			deps.Config.E2EIntake.Algorithm = e2e.Algorithm
+		}
+		if !e2e.SupportedAlgorithm(deps.Config.E2EIntake.Algorithm) {
+			return nil, fmt.Errorf("unsupported E2E intake algorithm")
+		}
+	}
+	if deps.Config.E2EIntake.Required && !deps.Config.E2EIntake.Enabled {
+		return nil, fmt.Errorf("E2E intake cannot be required when disabled")
+	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
@@ -139,6 +159,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAdmin)
 		r.Get("/api/admin/me", s.handleMe)
+		r.Get("/api/admin/e2e", s.handleE2EConfig)
 		r.With(s.requireCSRF).Post("/api/admin/logout", s.handleLogout)
 		r.Get("/api/admin/pages", s.handleListPages)
 		r.With(s.requireCSRF).Post("/api/admin/pages", s.handleCreatePage)
@@ -188,6 +209,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"username": s.cfg.AdminUsername})
 }
 
+func (s *Server) handleE2EConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":   s.cfg.E2EIntake.Enabled,
+		"required":  s.cfg.E2EIntake.Required,
+		"algorithm": s.cfg.E2EIntake.Algorithm,
+	})
+}
+
 func (s *Server) handleListPages(w http.ResponseWriter, r *http.Request) {
 	pages, err := s.store.ListPages(r.Context())
 	if err != nil {
@@ -207,13 +236,7 @@ func (s *Server) handleCreatePage(w http.ResponseWriter, r *http.Request) {
 		writeRequestError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, pageResponse{
-		ID:          page.ID,
-		Slug:        page.Slug,
-		URL:         s.shareURL(page.Slug),
-		Title:       page.Title,
-		Description: page.Description,
-	})
+	writeJSON(w, http.StatusCreated, s.pageResponse(page))
 }
 
 func (s *Server) handleUpdatePage(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +295,13 @@ func (s *Server) handleDeletePage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	pageID, ok := parseIDParam(w, r, "pageID")
 	if !ok {
+		return
+	}
+	if _, err := s.store.GetPage(r.Context(), pageID); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	} else if err != nil {
+		s.serverError(w, err)
 		return
 	}
 	uploads, err := s.store.ListUploads(r.Context(), pageID)
@@ -453,6 +483,7 @@ func (s *Server) handlePublicPage(w http.ResponseWriter, r *http.Request) {
 		"pin_required": page.PinHash != "",
 		"max_size":     maxSize,
 		"allowed_ext":  allowed,
+		"e2e":          publicE2E(page),
 	})
 }
 
@@ -498,20 +529,40 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_multipart", "expected multipart form data")
 		return
 	}
-	part, err := nextFilePart(reader)
+	uploadParts, err := nextUploadParts(reader)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "missing_file", "multipart field 'file' is required")
 		return
 	}
+	part := uploadParts.file
 	defer part.Close()
 	original := part.FileName()
 	if original == "" {
 		writeError(w, http.StatusBadRequest, "missing_filename", "uploaded file must have a filename")
 		return
 	}
-	if allowed, restricted := s.effectiveAllowedExt(page); restricted && !extensionContains(allowed, original) {
-		writeError(w, http.StatusBadRequest, "extension_not_allowed", "this file extension is not allowed")
-		return
+	var encryptionMode string
+	var encryptionAlgorithm string
+	var encryptionEnvelope string
+	contentType := part.Header.Get("Content-Type")
+	storedName := filepath.Base(original)
+	limit := s.effectiveMaxFileSize(page)
+	if page.E2EEnabled {
+		envelope, err := validateE2EEnvelope(uploadParts.fields["e2e_envelope"], page)
+		if err != nil {
+			writeRequestError(w, err)
+			return
+		}
+		encryptionMode = e2e.UploadMode
+		encryptionAlgorithm = envelope.Algorithm
+		encryptionEnvelope = uploadParts.fields["e2e_envelope"]
+		contentType = "application/octet-stream"
+		limit += e2e.CiphertextOverheadAllowance
+	} else {
+		if allowed, restricted := s.effectiveAllowedExt(page); restricted && !extensionContains(allowed, original) {
+			writeError(w, http.StatusBadRequest, "extension_not_allowed", "this file extension is not allowed")
+			return
+		}
 	}
 
 	uploadID, err := ids.NewUUID()
@@ -519,9 +570,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	key := s.objectKey(page.Slug, uploadID, original)
-	counting := &countingLimitReader{r: part, remaining: s.effectiveMaxFileSize(page)}
-	contentType := part.Header.Get("Content-Type")
+	if page.E2EEnabled {
+		storedName = uploadID + ".zener"
+	}
+	key := s.objectKey(page.Slug, uploadID, storedName)
+	counting := &countingLimitReader{r: part, remaining: limit}
 	if err := s.blobs.Upload(r.Context(), key, counting, contentType); errors.Is(err, errTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds the configured size limit")
 		return
@@ -530,21 +583,25 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upload, err := s.store.CreateUpload(r.Context(), store.UploadCreate{
-		PageID:       page.ID,
-		S3Key:        key,
-		OriginalName: filepath.Base(original),
-		SizeBytes:    counting.count,
-		ContentType:  contentType,
-		UploaderIP:   clientIP(r, s.cfg.TrustedProxyHops),
+		PageID:              page.ID,
+		S3Key:               key,
+		OriginalName:        storedName,
+		SizeBytes:           counting.count,
+		ContentType:         contentType,
+		UploaderIP:          clientIP(r, s.cfg.TrustedProxyHops),
+		EncryptionMode:      encryptionMode,
+		EncryptionAlgorithm: encryptionAlgorithm,
+		EncryptionEnvelope:  encryptionEnvelope,
 	})
 	if err != nil {
 		s.serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":   upload.ID,
-		"name": upload.OriginalName,
-		"size": upload.SizeBytes,
+		"id":              upload.ID,
+		"name":            upload.OriginalName,
+		"size":            upload.SizeBytes,
+		"encryption_mode": upload.EncryptionMode,
 	})
 }
 
@@ -566,20 +623,28 @@ func (s *Server) createPage(ctx context.Context, req pageRequest) (store.Page, e
 	if err != nil {
 		return store.Page{}, err
 	}
+	e2eIdentity, err := s.validatePageE2E(req)
+	if err != nil {
+		return store.Page{}, err
+	}
 	for i := 0; i < 8; i++ {
 		slug, err := ids.GenerateSlug(24)
 		if err != nil {
 			return store.Page{}, err
 		}
 		page, err := s.store.CreatePage(ctx, store.PageCreate{
-			Slug:        slug,
-			Title:       title,
-			Description: strings.TrimSpace(req.Description),
-			PinHash:     pinHash,
-			MaxFileSize: maxFileSize,
-			AllowedExt:  allowed,
-			ExpiresAt:   expiresAt,
-			IsActive:    true,
+			Slug:                    slug,
+			Title:                   title,
+			Description:             strings.TrimSpace(req.Description),
+			PinHash:                 pinHash,
+			MaxFileSize:             maxFileSize,
+			AllowedExt:              allowed,
+			ExpiresAt:               expiresAt,
+			IsActive:                true,
+			E2EEnabled:              e2eIdentity.enabled,
+			E2EAlgorithm:            e2eIdentity.algorithm,
+			E2EPublicKey:            e2eIdentity.publicKey,
+			E2EPublicKeyFingerprint: e2eIdentity.fingerprint,
 		})
 		if err == nil {
 			return page, nil
@@ -703,12 +768,15 @@ func (s *Server) serverError(w http.ResponseWriter, err error) {
 }
 
 type pageRequest struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	PIN         string `json:"pin"`
-	MaxFileSize *int64 `json:"max_file_size"`
-	AllowedExt  string `json:"allowed_ext"`
-	ExpiresAt   string `json:"expires_at"`
+	Title                   string `json:"title"`
+	Description             string `json:"description"`
+	PIN                     string `json:"pin"`
+	MaxFileSize             *int64 `json:"max_file_size"`
+	AllowedExt              string `json:"allowed_ext"`
+	ExpiresAt               string `json:"expires_at"`
+	E2EPublicKey            string `json:"e2e_public_key"`
+	E2EPublicKeyFingerprint string `json:"e2e_public_key_fingerprint"`
+	E2EAlgorithm            string `json:"e2e_algorithm"`
 }
 
 type pagePatchRequest struct {
@@ -722,11 +790,162 @@ type pagePatchRequest struct {
 }
 
 type pageResponse struct {
-	ID          int64  `json:"id"`
-	Slug        string `json:"slug"`
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
+	ID                      int64  `json:"id"`
+	Slug                    string `json:"slug"`
+	URL                     string `json:"url"`
+	Title                   string `json:"title"`
+	Description             string `json:"description,omitempty"`
+	E2EPublicKey            string `json:"e2e_public_key,omitempty"`
+	E2EPublicKeyFingerprint string `json:"e2e_public_key_fingerprint,omitempty"`
+	E2EAlgorithm            string `json:"e2e_algorithm,omitempty"`
+}
+
+type publicE2EResponse struct {
+	Enabled              bool   `json:"enabled"`
+	Algorithm            string `json:"algorithm"`
+	PublicKey            string `json:"public_key"`
+	PublicKeyFingerprint string `json:"public_key_fingerprint"`
+}
+
+func (s *Server) pageResponse(page store.Page) pageResponse {
+	return pageResponse{
+		ID:                      page.ID,
+		Slug:                    page.Slug,
+		URL:                     s.shareURL(page.Slug),
+		Title:                   page.Title,
+		Description:             page.Description,
+		E2EPublicKey:            page.E2EPublicKey,
+		E2EPublicKeyFingerprint: page.E2EPublicKeyFingerprint,
+		E2EAlgorithm:            page.E2EAlgorithm,
+	}
+}
+
+func publicE2E(page store.Page) *publicE2EResponse {
+	if !page.E2EEnabled {
+		return nil
+	}
+	return &publicE2EResponse{
+		Enabled:              true,
+		Algorithm:            page.E2EAlgorithm,
+		PublicKey:            page.E2EPublicKey,
+		PublicKeyFingerprint: page.E2EPublicKeyFingerprint,
+	}
+}
+
+type pageE2EIdentity struct {
+	enabled     bool
+	algorithm   string
+	publicKey   string
+	fingerprint string
+}
+
+func (s *Server) validatePageE2E(req pageRequest) (pageE2EIdentity, error) {
+	publicKey := strings.TrimSpace(req.E2EPublicKey)
+	fingerprint := strings.TrimSpace(req.E2EPublicKeyFingerprint)
+	algorithm := strings.TrimSpace(req.E2EAlgorithm)
+	if algorithm == "" {
+		algorithm = s.cfg.E2EIntake.Algorithm
+	}
+	hasAny := publicKey != "" || fingerprint != "" || strings.TrimSpace(req.E2EAlgorithm) != ""
+	hasComplete := publicKey != "" && fingerprint != ""
+	if s.cfg.E2EIntake.Required && !hasComplete {
+		return pageE2EIdentity{}, requestError{status: http.StatusBadRequest, code: "e2e_required", message: "E2E intake requires an encryption public key"}
+	}
+	if !hasAny {
+		return pageE2EIdentity{}, nil
+	}
+	if !s.cfg.E2EIntake.Enabled {
+		return pageE2EIdentity{}, requestError{status: http.StatusBadRequest, code: "e2e_disabled", message: "E2E intake is disabled"}
+	}
+	if !hasComplete {
+		return pageE2EIdentity{}, requestError{status: http.StatusBadRequest, code: "e2e_identity_required", message: "E2E intake requires a public key and fingerprint"}
+	}
+	if algorithm != s.cfg.E2EIntake.Algorithm || !e2e.SupportedAlgorithm(algorithm) {
+		return pageE2EIdentity{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_algorithm", message: "unsupported E2E intake algorithm"}
+	}
+	if err := validatePublicIdentity(publicKey, fingerprint, algorithm); err != nil {
+		return pageE2EIdentity{}, err
+	}
+	return pageE2EIdentity{
+		enabled:     true,
+		algorithm:   algorithm,
+		publicKey:   publicKey,
+		fingerprint: fingerprint,
+	}, nil
+}
+
+func validatePublicIdentity(raw, fingerprint, algorithm string) error {
+	if len(raw) > 8192 {
+		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key is too large"}
+	}
+	if !strings.HasPrefix(fingerprint, "sha256:") || len(fingerprint) > 128 {
+		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key fingerprint is invalid"}
+	}
+	if strings.Contains(raw, "secretKey") || strings.Contains(raw, "private") {
+		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key must not contain private key material"}
+	}
+	var parsed struct {
+		Zener       string `json:"zener"`
+		Version     int    `json:"version"`
+		Algorithm   string `json:"algorithm"`
+		PublicKey   string `json:"publicKey"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key must be valid JSON"}
+	}
+	if parsed.Zener != "e2e-public-key" || parsed.Version != 1 || parsed.Algorithm != algorithm || parsed.PublicKey == "" || parsed.Fingerprint != fingerprint {
+		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key does not match the requested algorithm and fingerprint"}
+	}
+	return nil
+}
+
+type e2eEnvelope struct {
+	Version                int    `json:"version"`
+	Algorithm              string `json:"algorithm"`
+	PublicKeyFingerprint   string `json:"public_key_fingerprint"`
+	KEMCiphertext          string `json:"kem_ciphertext"`
+	ECDHEphemeralPublicKey string `json:"ecdh_ephemeral_public_key"`
+	Salt                   string `json:"salt"`
+	FileNonce              string `json:"file_nonce"`
+	MetadataNonce          string `json:"metadata_nonce"`
+	EncryptedMetadata      string `json:"encrypted_metadata"`
+}
+
+func validateE2EEnvelope(raw string, page store.Page) (e2eEnvelope, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "e2e_required", message: "encrypted pages require an E2E envelope"}
+	}
+	if len(raw) > 65536 {
+		return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_envelope", message: "E2E envelope is too large"}
+	}
+	var envelope e2eEnvelope
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_envelope", message: "E2E envelope must be valid JSON"}
+	}
+	if envelope.Version != 1 || envelope.Algorithm != page.E2EAlgorithm || envelope.PublicKeyFingerprint != page.E2EPublicKeyFingerprint {
+		return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_envelope", message: "E2E envelope does not match this page"}
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"kem_ciphertext", envelope.KEMCiphertext},
+		{"ecdh_ephemeral_public_key", envelope.ECDHEphemeralPublicKey},
+		{"salt", envelope.Salt},
+		{"file_nonce", envelope.FileNonce},
+		{"metadata_nonce", envelope.MetadataNonce},
+		{"encrypted_metadata", envelope.EncryptedMetadata},
+	} {
+		if field.value == "" {
+			return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_envelope", message: "E2E envelope is missing " + field.name}
+		}
+		if _, err := base64.RawURLEncoding.DecodeString(field.value); err != nil {
+			return e2eEnvelope{}, requestError{status: http.StatusBadRequest, code: "invalid_e2e_envelope", message: "E2E envelope contains invalid base64url"}
+		}
+	}
+	return envelope, nil
 }
 
 type patchString struct {
@@ -990,17 +1209,45 @@ func (r *countingLimitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func nextFilePart(reader *multipart.Reader) (*multipart.Part, error) {
+type uploadParts struct {
+	fields map[string]string
+	file   *multipart.Part
+}
+
+func nextUploadParts(reader *multipart.Reader) (uploadParts, error) {
+	fields := map[string]string{}
 	for {
 		part, err := reader.NextPart()
 		if err != nil {
-			return nil, err
+			return uploadParts{}, err
 		}
 		if part.FormName() == "file" {
-			return part, nil
+			return uploadParts{fields: fields, file: part}, nil
+		}
+		if part.FileName() == "" && part.FormName() != "" {
+			value, err := readSmallMultipartField(part)
+			_ = part.Close()
+			if err != nil {
+				return uploadParts{}, err
+			}
+			fields[part.FormName()] = value
+			continue
 		}
 		_ = part.Close()
 	}
+}
+
+func readSmallMultipartField(part *multipart.Part) (string, error) {
+	const maxFieldBytes = 64 << 10
+	var buf bytes.Buffer
+	n, err := io.CopyN(&buf, part, maxFieldBytes+1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if n > maxFieldBytes {
+		return "", fmt.Errorf("multipart field too large")
+	}
+	return buf.String(), nil
 }
 
 // extensionContains reports whether filename's extension is in allowed. Unlike a

@@ -49,29 +49,37 @@ type SQLite struct {
 }
 
 type Page struct {
-	ID          int64      `json:"id"`
-	Slug        string     `json:"slug"`
-	Title       string     `json:"title"`
-	Description string     `json:"description,omitempty"`
-	PinHash     string     `json:"-"`
-	MaxFileSize *int64     `json:"max_file_size,omitempty"`
-	AllowedExt  string     `json:"allowed_ext,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	IsActive    bool       `json:"is_active"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UploadCount int64      `json:"upload_count"`
-	TotalBytes  int64      `json:"total_bytes"`
+	ID                      int64      `json:"id"`
+	Slug                    string     `json:"slug"`
+	Title                   string     `json:"title"`
+	Description             string     `json:"description,omitempty"`
+	PinHash                 string     `json:"-"`
+	MaxFileSize             *int64     `json:"max_file_size,omitempty"`
+	AllowedExt              string     `json:"allowed_ext,omitempty"`
+	ExpiresAt               *time.Time `json:"expires_at,omitempty"`
+	IsActive                bool       `json:"is_active"`
+	E2EEnabled              bool       `json:"e2e_enabled"`
+	E2EAlgorithm            string     `json:"e2e_algorithm,omitempty"`
+	E2EPublicKey            string     `json:"e2e_public_key,omitempty"`
+	E2EPublicKeyFingerprint string     `json:"e2e_public_key_fingerprint,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UploadCount             int64      `json:"upload_count"`
+	TotalBytes              int64      `json:"total_bytes"`
 }
 
 type PageCreate struct {
-	Slug        string
-	Title       string
-	Description string
-	PinHash     string
-	MaxFileSize *int64
-	AllowedExt  string
-	ExpiresAt   *time.Time
-	IsActive    bool
+	Slug                    string
+	Title                   string
+	Description             string
+	PinHash                 string
+	MaxFileSize             *int64
+	AllowedExt              string
+	ExpiresAt               *time.Time
+	IsActive                bool
+	E2EEnabled              bool
+	E2EAlgorithm            string
+	E2EPublicKey            string
+	E2EPublicKeyFingerprint string
 }
 
 type NullableString struct {
@@ -100,23 +108,29 @@ type PageUpdate struct {
 }
 
 type Upload struct {
-	ID           int64     `json:"id"`
-	PageID       int64     `json:"page_id"`
-	S3Key        string    `json:"-"`
-	OriginalName string    `json:"name"`
-	SizeBytes    int64     `json:"size"`
-	ContentType  string    `json:"content_type,omitempty"`
-	UploaderIP   string    `json:"uploader_ip,omitempty"`
-	UploadedAt   time.Time `json:"uploaded_at"`
+	ID                  int64     `json:"id"`
+	PageID              int64     `json:"page_id"`
+	S3Key               string    `json:"-"`
+	OriginalName        string    `json:"name"`
+	SizeBytes           int64     `json:"size"`
+	ContentType         string    `json:"content_type,omitempty"`
+	UploaderIP          string    `json:"uploader_ip,omitempty"`
+	EncryptionMode      string    `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm string    `json:"encryption_algorithm,omitempty"`
+	EncryptionEnvelope  string    `json:"encryption_envelope,omitempty"`
+	UploadedAt          time.Time `json:"uploaded_at"`
 }
 
 type UploadCreate struct {
-	PageID       int64
-	S3Key        string
-	OriginalName string
-	SizeBytes    int64
-	ContentType  string
-	UploaderIP   string
+	PageID              int64
+	S3Key               string
+	OriginalName        string
+	SizeBytes           int64
+	ContentType         string
+	UploaderIP          string
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	EncryptionEnvelope  string
 }
 
 func Open(ctx context.Context, path string) (*SQLite, error) {
@@ -172,6 +186,10 @@ CREATE TABLE IF NOT EXISTS pages (
   allowed_ext TEXT,
   expires_at TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
+  e2e_enabled INTEGER NOT NULL DEFAULT 0,
+  e2e_algorithm TEXT,
+  e2e_public_key TEXT,
+  e2e_public_key_fingerprint TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE TABLE IF NOT EXISTS uploads (
@@ -182,10 +200,41 @@ CREATE TABLE IF NOT EXISTS uploads (
   size_bytes INTEGER NOT NULL,
   content_type TEXT,
   uploader_ip TEXT,
+  encryption_mode TEXT,
+  encryption_algorithm TEXT,
+  encryption_envelope TEXT,
   uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC);
 `)
+	if err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		table string
+		name  string
+		def   string
+	}{
+		{"pages", "e2e_enabled", "INTEGER NOT NULL DEFAULT 0"},
+		{"pages", "e2e_algorithm", "TEXT"},
+		{"pages", "e2e_public_key", "TEXT"},
+		{"pages", "e2e_public_key_fingerprint", "TEXT"},
+		{"uploads", "encryption_mode", "TEXT"},
+		{"uploads", "encryption_algorithm", "TEXT"},
+		{"uploads", "encryption_envelope", "TEXT"},
+	} {
+		if err := s.ensureColumn(ctx, column.table, column.name, column.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLite) ensureColumn(ctx context.Context, table, name, def string) error {
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, name, def))
+	if err == nil || strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return nil
+	}
 	return err
 }
 
@@ -197,9 +246,11 @@ func (s *SQLite) CreatePage(ctx context.Context, in PageCreate) (Page, error) {
 		return Page{}, fmt.Errorf("slug is required")
 	}
 	res, err := s.db.ExecContext(ctx, `
-INSERT INTO pages (slug, title, description, pin_hash, max_file_size, allowed_ext, expires_at, is_active)
-VALUES (?, ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), ?, ?)`,
-		in.Slug, in.Title, in.Description, in.PinHash, nullableInt(in.MaxFileSize), in.AllowedExt, formatTimePtr(in.ExpiresAt), 1)
+INSERT INTO pages (slug, title, description, pin_hash, max_file_size, allowed_ext, expires_at, is_active,
+                   e2e_enabled, e2e_algorithm, e2e_public_key, e2e_public_key_fingerprint)
+VALUES (?, ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		in.Slug, in.Title, in.Description, in.PinHash, nullableInt(in.MaxFileSize), in.AllowedExt, formatTimePtr(in.ExpiresAt),
+		1, boolInt(in.E2EEnabled), in.E2EAlgorithm, in.E2EPublicKey, in.E2EPublicKeyFingerprint)
 	if isUniqueViolation(err) {
 		return Page{}, ErrDuplicateSlug
 	}
@@ -216,7 +267,9 @@ VALUES (?, ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), ?, ?)`,
 func (s *SQLite) ListPages(ctx context.Context) ([]Page, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
-       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active, p.created_at,
+       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
+       p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
+       p.created_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -241,7 +294,9 @@ ORDER BY p.created_at DESC, p.id DESC`)
 func (s *SQLite) GetPage(ctx context.Context, id int64) (Page, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
-       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active, p.created_at,
+       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
+       p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
+       p.created_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -253,7 +308,9 @@ GROUP BY p.id`, id)
 func (s *SQLite) GetPageBySlug(ctx context.Context, slug string) (Page, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
-       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active, p.created_at,
+       coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
+       p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
+       p.created_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -295,9 +352,12 @@ func (s *SQLite) UpdatePage(ctx context.Context, id int64, in PageUpdate) (Page,
 	_, err = s.db.ExecContext(ctx, `
 UPDATE pages
 SET title = ?, description = nullif(?, ''), pin_hash = nullif(?, ''), max_file_size = ?,
-    allowed_ext = nullif(?, ''), expires_at = ?, is_active = ?
+    allowed_ext = nullif(?, ''), expires_at = ?, is_active = ?,
+    e2e_enabled = ?, e2e_algorithm = nullif(?, ''), e2e_public_key = nullif(?, ''),
+    e2e_public_key_fingerprint = nullif(?, '')
 WHERE id = ?`,
-		page.Title, page.Description, page.PinHash, nullableInt(page.MaxFileSize), page.AllowedExt, formatTimePtr(page.ExpiresAt), active, id)
+		page.Title, page.Description, page.PinHash, nullableInt(page.MaxFileSize), page.AllowedExt, formatTimePtr(page.ExpiresAt), active,
+		boolInt(page.E2EEnabled), page.E2EAlgorithm, page.E2EPublicKey, page.E2EPublicKeyFingerprint, id)
 	if err != nil {
 		return Page{}, err
 	}
@@ -318,9 +378,11 @@ func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
 
 func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, error) {
 	res, err := s.db.ExecContext(ctx, `
-INSERT INTO uploads (page_id, s3_key, original_name, size_bytes, content_type, uploader_ip)
-VALUES (?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
-		in.PageID, in.S3Key, in.OriginalName, in.SizeBytes, in.ContentType, in.UploaderIP)
+INSERT INTO uploads (page_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
+                     encryption_mode, encryption_algorithm, encryption_envelope)
+VALUES (?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		in.PageID, in.S3Key, in.OriginalName, in.SizeBytes, in.ContentType, in.UploaderIP,
+		in.EncryptionMode, in.EncryptionAlgorithm, in.EncryptionEnvelope)
 	if err != nil {
 		return Upload{}, err
 	}
@@ -333,7 +395,9 @@ VALUES (?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
 
 func (s *SQLite) ListUploads(ctx context.Context, pageID int64) ([]Upload, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''), uploaded_at
+SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''),
+       coalesce(encryption_mode, ''), coalesce(encryption_algorithm, ''), coalesce(encryption_envelope, ''),
+       uploaded_at
 FROM uploads
 WHERE page_id = ?
 ORDER BY uploaded_at DESC, id DESC`, pageID)
@@ -354,7 +418,9 @@ ORDER BY uploaded_at DESC, id DESC`, pageID)
 
 func (s *SQLite) GetUpload(ctx context.Context, pageID, uploadID int64) (Upload, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''), uploaded_at
+SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''),
+       coalesce(encryption_mode, ''), coalesce(encryption_algorithm, ''), coalesce(encryption_envelope, ''),
+       uploaded_at
 FROM uploads
 WHERE page_id = ? AND id = ?`, pageID, uploadID)
 	return scanUpload(row)
@@ -382,7 +448,10 @@ func scanPage(row scanner) (Page, error) {
 	var expires sql.NullString
 	var created string
 	var active int
-	err := row.Scan(&page.ID, &page.Slug, &page.Title, &page.Description, &page.PinHash, &max, &page.AllowedExt, &expires, &active, &created, &page.UploadCount, &page.TotalBytes)
+	var e2eEnabled int
+	err := row.Scan(&page.ID, &page.Slug, &page.Title, &page.Description, &page.PinHash, &max, &page.AllowedExt, &expires, &active,
+		&e2eEnabled, &page.E2EAlgorithm, &page.E2EPublicKey, &page.E2EPublicKeyFingerprint,
+		&created, &page.UploadCount, &page.TotalBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Page{}, ErrNotFound
 	}
@@ -405,13 +474,15 @@ func scanPage(row scanner) (Page, error) {
 	}
 	page.CreatedAt = parsed
 	page.IsActive = active == 1
+	page.E2EEnabled = e2eEnabled == 1
 	return page, nil
 }
 
 func scanUpload(row scanner) (Upload, error) {
 	var upload Upload
 	var uploaded string
-	err := row.Scan(&upload.ID, &upload.PageID, &upload.S3Key, &upload.OriginalName, &upload.SizeBytes, &upload.ContentType, &upload.UploaderIP, &uploaded)
+	err := row.Scan(&upload.ID, &upload.PageID, &upload.S3Key, &upload.OriginalName, &upload.SizeBytes, &upload.ContentType, &upload.UploaderIP,
+		&upload.EncryptionMode, &upload.EncryptionAlgorithm, &upload.EncryptionEnvelope, &uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Upload{}, ErrNotFound
 	}
@@ -448,6 +519,13 @@ func nullableInt(v *int64) any {
 		return nil
 	}
 	return *v
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func valueOrEmpty(v *string) string {

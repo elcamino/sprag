@@ -26,21 +26,29 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	"github.com/tob/zener/internal/e2e"
 )
 
 const defaultMaxFileSize int64 = 5 * 1024 * 1024 * 1024
 
 type Config struct {
-	Port              string   `json:"port"`
-	BaseURL           string   `json:"base_url"`
-	SessionSecret     []byte   `json:"-"`
-	AdminUsername     string   `json:"admin_username"`
-	AdminPassword     string   `json:"-"`
-	MaxFileSize       int64    `json:"max_file_size"`
-	AllowedExtensions []string `json:"allowed_ext,omitempty"`
-	DBPath            string   `json:"db_path"`
-	TrustedProxyHops  int      `json:"trusted_proxy_hops"`
-	S3                S3Config `json:"s3"`
+	Port              string    `json:"port"`
+	BaseURL           string    `json:"base_url"`
+	SessionSecret     []byte    `json:"-"`
+	AdminUsername     string    `json:"admin_username"`
+	AdminPassword     string    `json:"-"`
+	MaxFileSize       int64     `json:"max_file_size"`
+	AllowedExtensions []string  `json:"allowed_ext,omitempty"`
+	DBPath            string    `json:"db_path"`
+	TrustedProxyHops  int       `json:"trusted_proxy_hops"`
+	E2EIntake         E2EConfig `json:"e2e_intake"`
+	S3                S3Config  `json:"s3"`
+}
+
+type E2EConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Required  bool   `json:"required"`
+	Algorithm string `json:"algorithm"`
 }
 
 type S3Config struct {
@@ -116,6 +124,27 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("TRUSTED_PROXY_HOPS must be a non-negative integer")
 	}
 	cfg.TrustedProxyHops = hops
+
+	e2eEnabled, err := strconv.ParseBool(get("E2E_INTAKE_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("E2E_INTAKE_ENABLED must be a boolean")
+	}
+	e2eRequired, err := strconv.ParseBool(get("E2E_INTAKE_REQUIRED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("E2E_INTAKE_REQUIRED must be a boolean")
+	}
+	if e2eRequired && !e2eEnabled {
+		return Config{}, fmt.Errorf("E2E_INTAKE_REQUIRED cannot be true when E2E_INTAKE_ENABLED is false")
+	}
+	e2eAlgorithm := get("E2E_INTAKE_ALGORITHM", e2e.Algorithm)
+	if !e2e.SupportedAlgorithm(e2eAlgorithm) {
+		return Config{}, fmt.Errorf("E2E_INTAKE_ALGORITHM must be %s", e2e.Algorithm)
+	}
+	cfg.E2EIntake = E2EConfig{
+		Enabled:   e2eEnabled,
+		Required:  e2eRequired,
+		Algorithm: e2eAlgorithm,
+	}
 
 	pathStyle := get("S3_USE_PATH_STYLE", "")
 	if pathStyle == "" {

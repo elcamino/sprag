@@ -86,6 +86,11 @@ func run(logger *slog.Logger) error {
 			S3Prefix:          cfg.S3.Prefix,
 			SecureCookies:     true,
 			TrustedProxyHops:  cfg.TrustedProxyHops,
+			E2EIntake: httpapi.E2EConfig{
+				Enabled:   cfg.E2EIntake.Enabled,
+				Required:  cfg.E2EIntake.Required,
+				Algorithm: cfg.E2EIntake.Algorithm,
+			},
 		},
 		Logger:   logger,
 		StaticFS: httpapi.FS(frontend),

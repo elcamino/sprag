@@ -30,6 +30,10 @@ export type PageSummary = {
   allowed_ext?: string;
   expires_at?: string;
   is_active: boolean;
+  e2e_enabled: boolean;
+  e2e_algorithm?: string;
+  e2e_public_key?: string;
+  e2e_public_key_fingerprint?: string;
   created_at: string;
   upload_count: number;
   total_bytes: number;
@@ -42,7 +46,17 @@ export type UploadFile = {
   size: number;
   content_type?: string;
   uploader_ip?: string;
+  encryption_mode?: string;
+  encryption_algorithm?: string;
+  encryption_envelope?: string;
   uploaded_at: string;
+};
+
+export type PublicPageE2E = {
+  enabled: true;
+  algorithm: string;
+  public_key: string;
+  public_key_fingerprint: string;
 };
 
 export type PublicPage = {
@@ -51,6 +65,7 @@ export type PublicPage = {
   pin_required: boolean;
   max_size: number;
   allowed_ext?: string[];
+  e2e?: PublicPageE2E | null;
 };
 
 export type CreatedPage = {
@@ -59,6 +74,15 @@ export type CreatedPage = {
   url: string;
   title: string;
   description?: string;
+  e2e_public_key?: string;
+  e2e_public_key_fingerprint?: string;
+  e2e_algorithm?: string;
+};
+
+export type E2EConfig = {
+  enabled: boolean;
+  required: boolean;
+  algorithm: string;
 };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
