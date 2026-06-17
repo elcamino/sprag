@@ -1,4 +1,4 @@
-# Zener
+# Sprag
 
 **A tiny, self-hostable, server-blind secure intake box.**
 One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing flows back out.
@@ -10,7 +10,7 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 
 ---
 
-Zener is named after the [Zener diode](https://en.wikipedia.org/wiki/Zener_diode): data flows **one way only**. Uploaders push files into an unguessable upload-page URL — they can never list, download, or even see what else has arrived. Only the authenticated admin can read what came in.
+Sprag is named after a sprag clutch: it engages in one direction and freewheels in the other. The product has the same shape for files. Uploaders push files into an unguessable upload-page URL — they can never list, download, or even see what else has arrived. Only the authenticated admin can read what came in.
 
 It is **not** a file-sharing product. It is an **asymmetric, anonymous intake box**: the admin creates a capability URL, hands it out, and someone on the other side drops files in. That is the whole shape of the product, and everything else is built to keep that shape small and legible.
 
@@ -26,7 +26,7 @@ With **server-blind E2E intake** enabled, the uploader's browser encrypts every 
 - **Doctors and researchers** collecting sensitive records
 - **Anyone** who needs to collect files from people who should not need an account
 
-## Why Zener
+## Why Sprag
 
 - **One-way by construction.** The uploader API surface is exactly three routes. There is no listing endpoint a sender can reach. Knowing one page's URL reveals nothing about any other page or the admin area.
 - **No accounts for uploaders. Ever.** The unguessable URL *is* the capability. That same trusted channel also carries the page's public key, so server-blind encryption needs no separate PKI or key-exchange ceremony.
@@ -39,32 +39,32 @@ With **server-blind E2E intake** enabled, the uploader's browser encrypts every 
 ```mermaid
 sequenceDiagram
     participant U as Uploader browser
-    participant Z as Zener (Go server)
+    participant P as Sprag (Go server)
     participant S as S3 bucket
     participant A as Admin browser
 
     Note over A: Admin generates an ML-KEM-1024 + P-384 keypair.<br/>Public key is attached to the upload page.<br/>Private key never leaves the admin device.
-    U->>Z: GET /u/{slug}  (page metadata + public key)
+    U->>P: GET /u/{slug}  (page metadata + public key)
     Note over U: Browser encrypts file and metadata locally:<br/>ML-KEM-1024 + P-384 -> HKDF-SHA-512 -> AES-256-GCM
-    U->>Z: POST ciphertext + opaque envelope
-    Z->>S: store {uuid}.zener  (ciphertext only)
-    Note over Z,S: Server and bucket never see plaintext,<br/>original filename, or any private key.
-    A->>Z: GET ciphertext + envelope  (authenticated)
-    Z-->>A: ciphertext + envelope
+    U->>P: POST ciphertext + opaque envelope
+    P->>S: store {uuid}.sprag  (ciphertext only)
+    Note over P,S: Server and bucket never see plaintext,<br/>original filename, or any private key.
+    A->>P: GET ciphertext + envelope  (authenticated)
+    P-->>A: ciphertext + envelope
     Note over A: Browser decrypts with the private key.<br/>Plaintext exists only on the two endpoints.
 ```
 
-Without E2E, Zener is still a strict one-way intake box: streaming uploads to S3, unguessable slugs, optional PINs, and admin-only listing and download. E2E mode adds the server-blindness on top.
+Without E2E, Sprag is still a strict one-way intake box: streaming uploads to S3, unguessable slugs, optional PINs, and admin-only listing and download. E2E mode adds the server-blindness on top.
 
 ## How it compares
 
-Most "send me a file" tools are **outbound** sharing products retrofitted for inbound use, and their servers can read your files in normal operation. Zener is built the other way around: inbound-only intake is the *only* thing it does, which is exactly why server blindness fits naturally instead of being bolted on.
+Most "send me a file" tools are **outbound** sharing products retrofitted for inbound use, and their servers can read your files in normal operation. Sprag is built the other way around: inbound-only intake is the *only* thing it does, which is exactly why server blindness fits naturally instead of being bolted on.
 
 The category itself is not empty — self-hosted "reverse share" tools exist, and at least one already pairs anonymous upload with S3 storage. What none of them do is the structural thing: a persistent, self-hosted, S3-backed intake box where the operator's server *provably cannot read* what was uploaded, with post-quantum encryption of the stored file.
 
 | Project | Intake model | Self-host / license | Client-side E2E of file | Post-quantum at rest | Footprint |
 | --- | --- | --- | --- | --- | --- |
-| **Zener** | One-way anonymous, no uploader account | Yes, GPL-3.0 | Yes | **Yes** (ML-KEM-1024 + P-384 hybrid) | Tiny, single Go binary |
+| **Sprag** | One-way anonymous, no uploader account | Yes, GPL-3.0 | Yes | **Yes** (ML-KEM-1024 + P-384 hybrid) | Tiny, single Go binary |
 | Pingvin Share X | Reverse shares plus accounts | Yes, BSD-2-Clause | No | No | Medium (Node, Docker, optional ClamAV) |
 | Sharry | Alias pages, anonymous upload to a user | Yes, GPL-3.0 | No | No | Medium (Scala/JVM) |
 | Nextcloud File Drop | Public upload link into a folder, no account | Yes, AGPL-3.0 | No | No | Heavy (PHP plus database) |
@@ -77,9 +77,9 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 | timvisee/send (Firefox Send fork) | One-way send link, no account | Yes, MPL-2.0 | Yes (AES-128) | No | Light (single container) |
 | WeTransfer | Outbound send, no account | No (proprietary, SaaS) | No (provider holds keys) | No | SaaS |
 
-Honest caveats so the matrix stays bulletproof: **Tresorit** has publicly chosen the same ML-KEM-1024 hybrid design Zener uses, but as of 2026 it is roadmap, not shipping, and not an anonymous-intake tool. **Internxt** genuinely ships some post-quantum encryption, but it is storage-only, Kyber-512 (NIST category 1, the lowest level), apparently not hybrid, and not confirmed for its Send product. **GlobaLeaks** runs live hybrid post-quantum TLS in transit but still stores submissions under classical encryption. The combination that is unique to Zener is the intersection: one-way anonymous intake, no uploader account, client-side post-quantum E2E of the file, and a tiny self-hosted footprint.
+Honest caveats so the matrix stays bulletproof: **Tresorit** has publicly chosen the same ML-KEM-1024 hybrid design Sprag uses, but as of 2026 it is roadmap, not shipping, and not an anonymous-intake tool. **Internxt** genuinely ships some post-quantum encryption, but it is storage-only, Kyber-512 (NIST category 1, the lowest level), apparently not hybrid, and not confirmed for its Send product. **GlobaLeaks** runs live hybrid post-quantum TLS in transit but still stores submissions under classical encryption. The combination that is unique to Sprag is the intersection: one-way anonymous intake, no uploader account, client-side post-quantum E2E of the file, and a tiny self-hosted footprint.
 
-Zener deliberately does **not** try to be a Dropbox, a ticketing system, or a form builder. There are no folders, no comment threads, no multi-tenant sharing permissions. That restraint is the moat.
+Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a form builder. There are no folders, no comment threads, no multi-tenant sharing permissions. That restraint is the moat.
 
 ## Features
 
@@ -98,7 +98,7 @@ Zener deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 - **Admin password** hashed with bcrypt. Supply it as plaintext (`ADMIN_PASSWORD`) or — better — as a precomputed bcrypt hash (`ADMIN_PASSWORD_HASH`) so the plaintext never lives in your config. Passwords beyond bcrypt's 72-byte limit are handled via an internal SHA-256 prehash.
 - **Rate limiting.** Admin login 5/min/IP, PIN attempts 10/min per slug+IP, keyed on the real client IP (see `TRUSTED_PROXY_HOPS`).
 - **Sessions.** Stateless HMAC-signed cookies, 7-day expiry, `HttpOnly` + `Secure` + `SameSite=Lax`.
-- **CSRF.** Admin mutations require the `X-Zener-CSRF` custom header in addition to the same-site cookie.
+- **CSRF.** Admin mutations require the `X-Sprag-CSRF` custom header in addition to the same-site cookie.
 - **Streaming with hard caps.** The size limit is enforced by a counting reader while streaming; an oversized upload aborts the S3 multipart upload instead of trusting `Content-Length`. Files are never buffered whole in memory or on disk.
 - **Path-safe storage.** S3 keys use server-generated UUID paths (`S3_PREFIX/<slug>/<uuid>/<filename>`); the original filename is metadata only, so a malicious name can't traverse or collide.
 - **Downloads are always `Content-Disposition: attachment`**, never inline, so the bucket can't be used as an XSS host.
@@ -106,11 +106,11 @@ Zener deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 
 ## Installation
 
-Zener needs three things to run: a place for metadata (a local SQLite file, created automatically), an S3-compatible bucket for file bodies, and a handful of secrets in a `.env` file. Startup fails fast with a clear message if anything required is missing.
+Sprag needs three things to run: a place for metadata (a local SQLite file, created automatically), an S3-compatible bucket for file bodies, and a handful of secrets in a `.env` file. Startup fails fast with a clear message if anything required is missing.
 
 ### Prerequisites
 
-- An **S3-compatible bucket** with credentials. Any provider works: AWS S3, Wasabi, Backblaze B2, or a self-hosted MinIO. The bucket must already exist; Zener does not create it.
+- An **S3-compatible bucket** with credentials. Any provider works: AWS S3, Wasabi, Backblaze B2, or a self-hosted MinIO. The bucket must already exist; Sprag does not create it.
 - For the **Docker** path: Docker with the Compose plugin.
 - For the **from-source** path: Go 1.26+ and Node.js 22+.
 
@@ -129,8 +129,8 @@ openssl rand -base64 32
 Set the admin password. Either set `ADMIN_PASSWORD` directly, or — recommended — store only a bcrypt hash so the plaintext never lives in your config:
 
 ```bash
-go run ./cmd/zener hash-password            # prompts for the password
-go run ./cmd/zener hash-password 'your-pw'  # or pass it as an argument
+go run ./cmd/sprag hash-password            # prompts for the password
+go run ./cmd/sprag hash-password 'your-pw'  # or pass it as an argument
 ```
 
 Put the printed hash in `ADMIN_PASSWORD_HASH`. If both are set, the hash wins.
@@ -141,18 +141,18 @@ Finally, fill in the S3 settings (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_A
 
 The bundled `docker-compose.yml` is a self-contained demo: it builds the app (multi-stage build to a distroless static image) and runs a Caddy reverse proxy in front of it. The app listens on port 8080 and Caddy forwards to it.
 
-Set `BASE_URL` in `.env` to the URL Caddy will serve, for example `https://zener.example.com`, or `https://localhost` for a local trial. Keep `TRUSTED_PROXY_HOPS=1`, because Caddy is the single proxy appending to `X-Forwarded-For`.
+Set `BASE_URL` in `.env` to the URL Caddy will serve, for example `https://sprag.org`, or `https://localhost` for a local trial. Keep `TRUSTED_PROXY_HOPS=1`, because Caddy is the single proxy appending to `X-Forwarded-For`.
 
 Local trial (Caddy issues a local CA certificate for `localhost`):
 
 ```bash
-ZENER_DOMAIN=localhost docker compose up --build
+SPRAG_DOMAIN=localhost docker compose up --build
 ```
 
 Production with automatic HTTPS (point your domain's DNS at the host first):
 
 ```bash
-ZENER_DOMAIN=zener.example.com docker compose up --build -d
+SPRAG_DOMAIN=sprag.org docker compose up --build -d
 ```
 
 Caddy listens on ports 80 and 443. The app container publishes no ports of its own; it is only reachable through the proxy.
@@ -166,7 +166,7 @@ cd frontend
 npm install
 npm run build
 cd ..
-go run ./cmd/zener
+go run ./cmd/sprag
 ```
 
 Open `http://localhost:8080/admin` and log in with `ADMIN_USERNAME` (default `admin`) and the admin password from your `.env`. For a fully local stack with no cloud account, run MinIO and set `S3_USE_PATH_STYLE=true`.
@@ -174,18 +174,18 @@ Open `http://localhost:8080/admin` and log in with `ADMIN_USERNAME` (default `ad
 To produce a standalone binary instead:
 
 ```bash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o zener ./cmd/zener
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o sprag ./cmd/sprag
 ```
 
 The build is CGO-free (pure-Go SQLite driver), so cross-compilation and single-binary distribution are trivial.
 
 ### Option C: Behind an existing shared Caddy
 
-If you already run a shared Caddy on an external network, drop the bundled `caddy` service and attach the app to that network instead. Keep the unique service name `zener-app` to avoid a DNS-alias collision with another project's container, and add a block to your existing Caddyfile:
+If you already run a shared Caddy on an external network, drop the bundled `caddy` service and attach the app to that network instead. Keep the unique service name `sprag-app` to avoid a DNS-alias collision with another project's container, and add a block to your existing Caddyfile:
 
 ```caddyfile
-zener.example.com {
-    reverse_proxy zener-app:8080
+sprag.org {
+    reverse_proxy sprag-app:8080
 }
 ```
 
@@ -200,7 +200,7 @@ Set `TRUSTED_PROXY_HOPS` to the number of proxies that append to `X-Forwarded-Fo
 
 ## Configuration
 
-Zener loads `.env` if present and then reads environment variables. Startup fails fast if required secrets or S3 values are missing.
+Sprag loads `.env` if present and then reads environment variables. Startup fails fast if required secrets or S3 values are missing.
 
 | Variable | Required | Default | Notes |
 |---|:---:|---|---|
@@ -213,7 +213,7 @@ Zener loads `.env` if present and then reads environment variables. Startup fail
 | `MAX_FILE_SIZE` | | `5368709120` (5 GiB) | Global default; per-page limits may only lower it. |
 | `ALLOWED_EXT` | | *(any)* | Comma list, e.g. `pdf,png,zip`. A hard ceiling per-page lists may narrow but not widen. |
 | `TRUSTED_PROXY_HOPS` | | `1` | Number of trusted proxies appending to `X-Forwarded-For`. `0` = directly exposed. |
-| `DB_PATH` | | `/data/zener.db` | SQLite path (WAL mode; back up the whole directory). |
+| `DB_PATH` | | `/data/sprag.db` | SQLite path (WAL mode; back up the whole directory). |
 | `S3_ENDPOINT` | Yes | | S3-compatible endpoint. |
 | `S3_REGION` | Yes | | |
 | `S3_BUCKET` | Yes | | |
@@ -245,13 +245,13 @@ When `E2E_INTAKE_ENABLED=true`, admins can create pages whose uploads are encryp
 
 **Back up each generated private key.** If it is lost, the matching encrypted uploads **cannot be recovered** — not by you, not by anyone. The server is blind by design.
 
-The admin UI can optionally store a generated private key encrypted in browser IndexedDB. The stored value is wrapped with a key derived from an admin-supplied passphrase via memory-hard Argon2id and sealed with AES-256-GCM; Zener never saves the passphrase. This is safer than keeping an unencrypted downloaded key, but weaker than a password manager or offline backup, and still does not protect against a compromised admin-origin script after the key is unlocked.
+The admin UI can optionally store a generated private key encrypted in browser IndexedDB. The stored value is wrapped with a key derived from an admin-supplied passphrase via memory-hard Argon2id and sealed with AES-256-GCM; Sprag never saves the passphrase. This is safer than keeping an unencrypted downloaded key, but weaker than a password manager or offline backup, and still does not protect against a compromised admin-origin script after the key is unlocked.
 
-**What server-blind does and does not protect against.** A trust product lives or dies on the precision of this claim, so state it plainly. Zener's E2E mode protects you against the passive, at-rest adversary: a stolen S3 bucket, a compromised admin session, an honest-but-curious operator, a backup that walks out the door, a full server compromise after the fact. In every one of those, the attacker gets ciphertext and an opaque envelope and nothing else. The true line is *the operator cannot read stored uploads; a breach yields only ciphertext.* What it does **not** defend against is an actively malicious or compromised host at upload time: the encryption runs in JavaScript the server delivers, and the public key arrives over the same channel, so a host that deliberately serves modified code or swaps the key could defeat it. The admin sees the key fingerprint in the dashboard, but it is not yet surfaced on the upload page for a source to compare out of band. This is the same caveat that applies to Firefox Send and to webmail-based "E2E"; it is inherent to browser-delivered cryptography, not a flaw in the construction. There is also no forward secrecy — the recipient key is static, so a leaked private key exposes the whole historical bucket — and because E2E encryption happens in a single pass in the uploader's browser, keep E2E uploads to a few hundred megabytes for now. The line you must **not** read into Zener is "zero-trust even against the host who runs it."
+**What server-blind does and does not protect against.** A trust product lives or dies on the precision of this claim, so state it plainly. Sprag's E2E mode protects you against the passive, at-rest adversary: a stolen S3 bucket, a compromised admin session, an honest-but-curious operator, a backup that walks out the door, a full server compromise after the fact. In every one of those, the attacker gets ciphertext and an opaque envelope and nothing else. The true line is *the operator cannot read stored uploads; a breach yields only ciphertext.* What it does **not** defend against is an actively malicious or compromised host at upload time: the encryption runs in JavaScript the server delivers, and the public key arrives over the same channel, so a host that deliberately serves modified code or swaps the key could defeat it. The admin sees the key fingerprint in the dashboard, but it is not yet surfaced on the upload page for a source to compare out of band. This is the same caveat that applies to Firefox Send and to webmail-based "E2E"; it is inherent to browser-delivered cryptography, not a flaw in the construction. There is also no forward secrecy — the recipient key is static, so a leaked private key exposes the whole historical bucket — and because E2E encryption happens in a single pass in the uploader's browser, keep E2E uploads to a few hundred megabytes for now. The line you must **not** read into Sprag is "zero-trust even against the host who runs it."
 
 ## Storage
 
-Metadata is stored in SQLite at `DB_PATH`. The database runs in WAL mode with a busy timeout so concurrent uploads don't fail under lock contention; this creates `-wal` and `-shm` sidecar files next to `DB_PATH`, so back up the whole directory. File bodies are streamed to S3-compatible object storage under `S3_PREFIX/<slug>/<uuid>/<filename>`. In E2E mode the stored object is opaque ciphertext (a `.zener` blob), the content type is forced to `application/octet-stream`, and the original filename lives only inside the encrypted envelope — never in the object key.
+Metadata is stored in SQLite at `DB_PATH`. The database runs in WAL mode with a busy timeout so concurrent uploads don't fail under lock contention; this creates `-wal` and `-shm` sidecar files next to `DB_PATH`, so back up the whole directory. File bodies are streamed to S3-compatible object storage under `S3_PREFIX/<slug>/<uuid>/<filename>`. In E2E mode the stored object is opaque ciphertext (a `.sprag` blob), the content type is forced to `application/octet-stream`, and the original filename lives only inside the encrypted envelope — never in the object key.
 
 ## Tech stack
 
@@ -269,4 +269,4 @@ cd frontend && npm test  # frontend tests (Vitest), including the E2E crypto rou
 
 ## License
 
-Zener is free software under the **GNU General Public License v3.0** (or later). See [LICENSE.md](LICENSE.md).
+Sprag is free software under the **GNU General Public License v3.0** (or later). See [LICENSE.md](LICENSE.md).

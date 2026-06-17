@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
 
-export const STORAGE_KEY = "zener-theme";
+export const STORAGE_KEY = "sprag-theme";
 
 export function readMode(storage: Pick<Storage, "getItem">): ThemeMode {
   const value = storage.getItem(STORAGE_KEY);

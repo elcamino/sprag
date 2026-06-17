@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -28,6 +28,14 @@ export type DownloadUnlockPrompt = {
   nonce: number;
 };
 
+export type SubmissionFileGroup = {
+  submissionID: string;
+  uploadedAt: string;
+  files: UploadFile[];
+  fileCount: number;
+  totalBytes: number;
+};
+
 export function selectedPageForID(pages: PageSummary[], selectedID: number | null): PageSummary | null {
   if (selectedID === null) {
     return pages[0] ?? null;
@@ -40,6 +48,30 @@ export function filesVisibleForSelectedPage(loadedFiles: LoadedFiles, selected: 
     return [];
   }
   return loadedFiles.files;
+}
+
+export function groupFilesBySubmission(files: UploadFile[]): SubmissionFileGroup[] {
+  const groups: SubmissionFileGroup[] = [];
+  const bySubmission = new Map<string, SubmissionFileGroup>();
+  for (const file of files) {
+    const submissionID = file.submission_id || `file-${file.id}`;
+    let group = bySubmission.get(submissionID);
+    if (!group) {
+      group = {
+        submissionID,
+        uploadedAt: file.submission_uploaded_at || file.uploaded_at,
+        files: [],
+        fileCount: 0,
+        totalBytes: 0
+      };
+      bySubmission.set(submissionID, group);
+      groups.push(group);
+    }
+    group.files.push(file);
+    group.fileCount += 1;
+    group.totalBytes += file.size;
+  }
+  return groups;
 }
 
 export function privateKeyControlState(loadedPrivateKey?: string): PrivateKeyControlState {

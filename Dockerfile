@@ -11,10 +11,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /src/frontend/dist ./frontend/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/zener ./cmd/zener
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sprag ./cmd/sprag
 
 FROM gcr.io/distroless/static-debian12
 WORKDIR /
-COPY --from=builder /out/zener /zener
+COPY --from=builder /out/sprag /sprag
 EXPOSE 8080
-ENTRYPOINT ["/zener"]
+ENTRYPOINT ["/sprag"]

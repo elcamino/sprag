@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -38,6 +38,10 @@ function fakeRoot() {
 }
 
 describe("readMode", () => {
+  it("uses a Sprag-specific storage key", () => {
+    expect(STORAGE_KEY).toBe("sprag-theme");
+  });
+
   it("defaults to system when empty", () => {
     expect(readMode(fakeStorage())).toBe("system");
   });

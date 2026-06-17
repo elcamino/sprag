@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import {
   downloadUnlockPromptActive,
   filesVisibleForSelectedPage,
+  groupFilesBySubmission,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
   selectedPageForID,
@@ -102,5 +103,51 @@ describe("admin page state", () => {
 
   it("does not prompt unlock for encrypted downloads when a private key is loaded", () => {
     expect(nextDownloadUnlockPrompt(null, 2, "private key JSON")).toBeNull();
+  });
+
+  it("keeps files from one submission envelope together", () => {
+    const groups = groupFilesBySubmission([
+      {
+        id: 2,
+        page_id: 1,
+        name: "two.txt",
+        size: 2,
+        uploaded_at: "2026-06-17T10:00:02Z",
+        submission_id: "submission-a",
+        submission_uploaded_at: "2026-06-17T10:00:00Z"
+      },
+      {
+        id: 1,
+        page_id: 1,
+        name: "one.txt",
+        size: 1,
+        uploaded_at: "2026-06-17T10:00:01Z",
+        submission_id: "submission-a",
+        submission_uploaded_at: "2026-06-17T10:00:00Z"
+      },
+      {
+        id: 3,
+        page_id: 1,
+        name: "single.txt",
+        size: 3,
+        uploaded_at: "2026-06-17T09:00:00Z",
+        submission_id: "submission-b",
+        submission_uploaded_at: "2026-06-17T09:00:00Z"
+      }
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      submissionID: "submission-a",
+      fileCount: 2,
+      totalBytes: 3,
+      uploadedAt: "2026-06-17T10:00:00Z"
+    });
+    expect(groups[0].files.map((file) => file.name)).toEqual(["two.txt", "one.txt"]);
+    expect(groups[1]).toMatchObject({
+      submissionID: "submission-b",
+      fileCount: 1,
+      totalBytes: 3
+    });
   });
 });

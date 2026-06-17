@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/elcamino/zener/internal/e2e"
+	"github.com/elcamino/sprag/internal/e2e"
 	"github.com/joho/godotenv"
 )
 
@@ -90,7 +90,7 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		AdminUsername:     get("ADMIN_USERNAME", "admin"),
 		AdminPassword:     get("ADMIN_PASSWORD", ""),
 		AdminPasswordHash: get("ADMIN_PASSWORD_HASH", ""),
-		DBPath:            get("DB_PATH", "/data/zener.db"),
+		DBPath:            get("DB_PATH", "/data/sprag.db"),
 		S3: S3Config{
 			Endpoint:  require("S3_ENDPOINT"),
 			Region:    require("S3_REGION"),

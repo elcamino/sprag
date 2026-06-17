@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elcamino/zener/internal/blob"
-	httpapi "github.com/elcamino/zener/internal/http"
-	"github.com/elcamino/zener/internal/store"
+	"github.com/elcamino/sprag/internal/blob"
+	httpapi "github.com/elcamino/sprag/internal/http"
+	"github.com/elcamino/sprag/internal/store"
 )
 
 func TestAdminCreatesPageUploaderUploadsAndAdminDownloads(t *testing.T) {
@@ -115,6 +115,51 @@ func TestAdminCreatesPageUploaderUploadsAndAdminDownloads(t *testing.T) {
 	}
 	if zr.File[0].Method != zip.Store {
 		t.Fatalf("expected zip store method, got %d", zr.File[0].Method)
+	}
+}
+
+func TestUploadsCanShareSubmissionEnvelope(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Envelope intake"})
+
+	submissionID := "11111111-1111-4111-8111-111111111111"
+	for _, name := range []string{"one.txt", "two.txt"} {
+		resp := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+			"submission_id": submissionID,
+		}, "file", name, []byte(name), nil)
+		if resp.Code != http.StatusCreated {
+			t.Fatalf("upload %q status = %d body=%s", name, resp.Code, resp.Body.String())
+		}
+		var created struct {
+			SubmissionID string `json:"submission_id"`
+		}
+		decodeJSON(t, resp.Body.Bytes(), &created)
+		if created.SubmissionID != submissionID {
+			t.Fatalf("upload %q submission_id = %q, want %q", name, created.SubmissionID, submissionID)
+		}
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	var listed []struct {
+		Name                 string `json:"name"`
+		SubmissionID         string `json:"submission_id"`
+		SubmissionUploadedAt string `json:"submission_uploaded_at"`
+	}
+	decodeJSON(t, files.Body.Bytes(), &listed)
+	if len(listed) != 2 {
+		t.Fatalf("expected two files, got %d", len(listed))
+	}
+	for _, file := range listed {
+		if file.SubmissionID != submissionID {
+			t.Fatalf("listed file %q submission_id = %q, want %q", file.Name, file.SubmissionID, submissionID)
+		}
+		if file.SubmissionUploadedAt == "" {
+			t.Fatalf("listed file %q missing submission_uploaded_at", file.Name)
+		}
 	}
 }
 
@@ -300,7 +345,7 @@ func TestE2EPagePublishesPublicKeyAndStoresEncryptedUploadMetadata(t *testing.T)
 
 	create := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{
 		"title":                      "Encrypted intake",
-		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key":             `{"sprag":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
 		"e2e_public_key_fingerprint": "sha256:test",
 		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
 	}, session, csrfHeader())
@@ -348,6 +393,9 @@ func TestE2EPagePublishesPublicKeyAndStoresEncryptedUploadMetadata(t *testing.T)
 		if strings.Contains(key, "privileged-report.pdf") {
 			t.Fatalf("object key leaked plaintext filename: %q", key)
 		}
+		if !strings.HasSuffix(key, ".sprag") {
+			t.Fatalf("encrypted object key suffix = %q, want .sprag", key)
+		}
 	}
 
 	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
@@ -382,7 +430,7 @@ func TestE2ERequiredRejectsPlainPagesAndPlainUploads(t *testing.T) {
 
 	slug := createPageSlug(t, handler, session, map[string]any{
 		"title":                      "Encrypted",
-		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key":             `{"sprag":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
 		"e2e_public_key_fingerprint": "sha256:test",
 		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
 	})
@@ -401,7 +449,7 @@ func TestE2EDisabledRejectsEncryptedPageIdentity(t *testing.T) {
 
 	create := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{
 		"title":                      "Encrypted",
-		"e2e_public_key":             `{"zener":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key":             `{"sprag":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
 		"e2e_public_key_fingerprint": "sha256:test",
 		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
 	}, session, csrfHeader())
@@ -473,7 +521,7 @@ func TestAdminMutationRequiresCSRFHeader(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	session := loginAdmin(t, handler)
 
-	// Valid session cookie but no X-Zener-CSRF header.
+	// Valid session cookie but no X-Sprag-CSRF header.
 	resp := performJSON(t, handler, http.MethodPost, "/api/admin/pages", map[string]any{"title": "No CSRF"}, session, nil)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("mutation without CSRF header status = %d body=%s", resp.Code, resp.Body.String())
@@ -606,13 +654,13 @@ func newHandlerErr(t *testing.T, tweak func(*httpapi.Config)) (http.Handler, *me
 func newHandlerWithErr(t *testing.T, blobs blob.Store, tweak func(*httpapi.Config)) (http.Handler, blob.Store, error) {
 	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "zener.db"))
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	cfg := httpapi.Config{
-		BaseURL:           "https://zener.example.test",
+		BaseURL:           "https://sprag.example.test",
 		SessionSecret:     []byte("12345678901234567890123456789012"),
 		AdminUsername:     "admin",
 		AdminPassword:     "correct-password",
@@ -717,7 +765,7 @@ func decodeJSON(t *testing.T, data []byte, dest any) {
 }
 
 func csrfHeader() map[string]string {
-	return map[string]string{"X-Zener-CSRF": "1"}
+	return map[string]string{"X-Sprag-CSRF": "1"}
 }
 
 func mergeHeaders(a, b map[string]string) map[string]string {

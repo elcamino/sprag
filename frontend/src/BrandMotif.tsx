@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -18,14 +18,14 @@ export function BrandMotif() {
   return (
     <svg className="brand-motif" width="100%" height="100%" aria-hidden="true" focusable="false">
       <defs>
-        <pattern id="zener-motif" width="240" height="240" patternUnits="userSpaceOnUse">
+        <pattern id="sprag-motif" width="240" height="240" patternUnits="userSpaceOnUse">
           <circle cx="48" cy="56" r="20" />
           <path d="M168 40h40 M188 20v40" />
           <rect x="158" y="150" width="38" height="38" rx="2" />
           <polygon points="64,150 71,170 92,170.5 75,183 81,204 64,192 47,204 53,183 36,170.5 57,170" />
         </pattern>
       </defs>
-      <rect width="100%" height="100%" fill="url(#zener-motif)" />
+      <rect width="100%" height="100%" fill="url(#sprag-motif)" />
     </svg>
   );
 }

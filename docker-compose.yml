@@ -1,12 +1,12 @@
 services:
-  zener-app:
+  sprag-app:
     build: .
     env_file:
       - .env
     volumes:
       - ./data:/data
     networks:
-      - zener-net
+      - sprag-net
     # No published ports: the app is only reachable through the reverse proxy.
     expose:
       - "8080"
@@ -19,9 +19,9 @@ services:
   caddy:
     image: caddy:2
     depends_on:
-      - zener-app
+      - sprag-app
     environment:
-      ZENER_DOMAIN: ${ZENER_DOMAIN:-localhost}
+      SPRAG_DOMAIN: ${SPRAG_DOMAIN:-localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -30,11 +30,11 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     networks:
-      - zener-net
+      - sprag-net
     restart: unless-stopped
 
 networks:
-  zener-net:
+  sprag-net:
     driver: bridge
 
 volumes:

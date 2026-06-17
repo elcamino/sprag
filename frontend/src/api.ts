@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -46,6 +46,8 @@ export type UploadFile = {
   size: number;
   content_type?: string;
   uploader_ip?: string;
+  submission_id?: string;
+  submission_uploaded_at?: string;
   encryption_mode?: string;
   encryption_algorithm?: string;
   encryption_envelope?: string;
@@ -89,7 +91,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
   const headers = new Headers(init.headers);
   if (method !== "GET" && method !== "HEAD") {
-    headers.set("X-Zener-CSRF", "1");
+    headers.set("X-Sprag-CSRF", "1");
   }
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");

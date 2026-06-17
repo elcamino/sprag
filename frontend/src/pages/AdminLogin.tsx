@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -47,7 +47,7 @@ export default function AdminLogin() {
         <div className="mark">
           <LockKeyhole size={22} />
         </div>
-        <h1>Zener</h1>
+        <h1>Sprag</h1>
         <form onSubmit={submit} className="stack">
           <label>
             <span>Username</span>

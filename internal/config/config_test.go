@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elcamino/zener/internal/config"
+	"github.com/elcamino/sprag/internal/config"
 )
 
 func TestLoadFromLookupRejectsMissingRequiredValues(t *testing.T) {
@@ -72,12 +72,12 @@ func TestLoadFromLookupRequiresPasswordOrHash(t *testing.T) {
 func baseValues() map[string]string {
 	secret := base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012"))
 	return map[string]string{
-		"BASE_URL":       "https://zener.example.test",
+		"BASE_URL":       "https://sprag.example.test",
 		"SESSION_SECRET": secret,
 		"ADMIN_PASSWORD": "super-secret",
 		"S3_ENDPOINT":    "https://s3.example.test",
 		"S3_REGION":      "eu-central-1",
-		"S3_BUCKET":      "zener",
+		"S3_BUCKET":      "sprag",
 		"S3_ACCESS_KEY":  "access-key",
 		"S3_SECRET_KEY":  "secret-key",
 	}
@@ -163,14 +163,14 @@ func TestLoadFromLookupRejectsNegativeTrustedProxyHops(t *testing.T) {
 func TestLoadFromLookupParsesDefaultsAndRedactsSecrets(t *testing.T) {
 	secret := base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012"))
 	values := map[string]string{
-		"BASE_URL":       "https://zener.example.test",
+		"BASE_URL":       "https://sprag.example.test",
 		"SESSION_SECRET": secret,
 		"ADMIN_USERNAME": "root",
 		"ADMIN_PASSWORD": "super-secret",
-		"DB_PATH":        "/data/zener.db",
+		"DB_PATH":        "/data/sprag.db",
 		"S3_ENDPOINT":    "https://s3.example.test",
 		"S3_REGION":      "eu-central-1",
-		"S3_BUCKET":      "zener",
+		"S3_BUCKET":      "sprag",
 		"S3_ACCESS_KEY":  "access-key",
 		"S3_SECRET_KEY":  "secret-key",
 		"S3_PREFIX":      "incoming/",

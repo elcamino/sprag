@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/elcamino/zener/internal/ids"
+	"github.com/elcamino/sprag/internal/ids"
 )
 
 func TestGenerateSlugIsBase62AndUnique(t *testing.T) {

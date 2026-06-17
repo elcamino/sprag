@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -25,8 +25,8 @@ export default function Home() {
         <span>Admin</span>
         <ArrowRight size={16} />
       </a>
-      <h1 className="home-mark" aria-label="Zener">
-        Z
+      <h1 className="home-mark" aria-label="Sprag">
+        S
       </h1>
     </main>
   );

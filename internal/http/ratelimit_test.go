@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	httpapi "github.com/elcamino/zener/internal/http"
+	httpapi "github.com/elcamino/sprag/internal/http"
 )
 
 // With one trusted proxy hop, an attacker who rotates the spoofable left side of

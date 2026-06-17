@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -14,8 +14,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-import { describe, expect, it } from "vitest";
-import { formatBytes } from "./api";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api, formatBytes } from "./api";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+});
 
 describe("formatBytes", () => {
   it("formats bytes below 1 KiB", () => {
@@ -32,5 +39,21 @@ describe("formatBytes", () => {
 
   it("formats gibibytes", () => {
     expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe("3.00 GiB");
+  });
+});
+
+describe("api", () => {
+  it("sends the Sprag CSRF header for mutations", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await api<{ ok: boolean }>("/api/admin/pages", { method: "POST", body: JSON.stringify({ title: "Inbox" }) });
+
+    const requestInit = fetchMock.mock.calls[0]?.[1];
+    expect(requestInit).toBeDefined();
+    const headers = new Headers(requestInit?.headers);
+    expect(headers.get("X-Sprag-CSRF")).toBe("1");
   });
 });

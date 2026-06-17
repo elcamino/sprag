@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -32,15 +32,16 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/elcamino/zener/internal/blob"
-	"github.com/elcamino/zener/internal/e2e"
-	"github.com/elcamino/zener/internal/ids"
-	"github.com/elcamino/zener/internal/store"
+	"github.com/elcamino/sprag/internal/blob"
+	"github.com/elcamino/sprag/internal/e2e"
+	"github.com/elcamino/sprag/internal/ids"
+	"github.com/elcamino/sprag/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/crypto/bcrypt"
@@ -52,9 +53,9 @@ var (
 )
 
 const (
-	sessionCookie = "zener_session"
-	pinCookie     = "zener_pin"
-	csrfHeader    = "X-Zener-CSRF"
+	sessionCookie = "sprag_session"
+	pinCookie     = "sprag_pin"
+	csrfHeader    = "X-Sprag-CSRF"
 )
 
 type Config struct {
@@ -559,6 +560,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	var encryptionMode string
 	var encryptionAlgorithm string
 	var encryptionEnvelope string
+	submissionID, err := normalizeSubmissionID(uploadParts.fields["submission_id"])
+	if err != nil {
+		writeRequestError(w, err)
+		return
+	}
 	contentType := part.Header.Get("Content-Type")
 	storedName := filepath.Base(original)
 	limit := s.effectiveMaxFileSize(page)
@@ -586,7 +592,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if page.E2EEnabled {
-		storedName = uploadID + ".zener"
+		storedName = uploadID + ".sprag"
 	}
 	key := s.objectKey(page.Slug, uploadID, storedName)
 	counting := &countingLimitReader{r: part, remaining: limit}
@@ -604,6 +610,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		SizeBytes:           counting.count,
 		ContentType:         contentType,
 		UploaderIP:          clientIP(r, s.cfg.TrustedProxyHops),
+		SubmissionID:        submissionID,
 		EncryptionMode:      encryptionMode,
 		EncryptionAlgorithm: encryptionAlgorithm,
 		EncryptionEnvelope:  encryptionEnvelope,
@@ -616,6 +623,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		"id":              upload.ID,
 		"name":            upload.OriginalName,
 		"size":            upload.SizeBytes,
+		"submission_id":   upload.SubmissionID,
 		"encryption_mode": upload.EncryptionMode,
 	})
 }
@@ -900,7 +908,7 @@ func validatePublicIdentity(raw, fingerprint, algorithm string) error {
 		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key must not contain private key material"}
 	}
 	var parsed struct {
-		Zener       string `json:"zener"`
+		Sprag       string `json:"sprag"`
 		Version     int    `json:"version"`
 		Algorithm   string `json:"algorithm"`
 		PublicKey   string `json:"publicKey"`
@@ -909,7 +917,7 @@ func validatePublicIdentity(raw, fingerprint, algorithm string) error {
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key must be valid JSON"}
 	}
-	if parsed.Zener != "e2e-public-key" || parsed.Version != 1 || parsed.Algorithm != algorithm || parsed.PublicKey == "" || parsed.Fingerprint != fingerprint {
+	if parsed.Sprag != "e2e-public-key" || parsed.Version != 1 || parsed.Algorithm != algorithm || parsed.PublicKey == "" || parsed.Fingerprint != fingerprint {
 		return requestError{status: http.StatusBadRequest, code: "invalid_e2e_public_key", message: "E2E public key does not match the requested algorithm and fingerprint"}
 	}
 	return nil
@@ -1263,6 +1271,23 @@ func readSmallMultipartField(part *multipart.Part) (string, error) {
 		return "", fmt.Errorf("multipart field too large")
 	}
 	return buf.String(), nil
+}
+
+var submissionIDPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._:-]{7,127}$`)
+
+func normalizeSubmissionID(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if !submissionIDPattern.MatchString(raw) {
+		return "", requestError{
+			status:  http.StatusBadRequest,
+			code:    "invalid_submission_id",
+			message: "submission id is invalid",
+		}
+	}
+	return raw, nil
 }
 
 // extensionContains reports whether filename's extension is in allowed. Unlike a

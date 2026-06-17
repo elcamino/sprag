@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export type E2EPublicIdentity = {
-  zener: typeof KEY_TYPE_PUBLIC;
+  sprag: typeof KEY_TYPE_PUBLIC;
   version: typeof VERSION;
   algorithm: typeof E2E_ALGORITHM;
   publicKey: string;
@@ -35,7 +35,7 @@ export type E2EPublicIdentity = {
 };
 
 export type E2EPrivateIdentity = {
-  zener: typeof KEY_TYPE_PRIVATE;
+  sprag: typeof KEY_TYPE_PRIVATE;
   version: typeof VERSION;
   algorithm: typeof E2E_ALGORITHM;
   publicIdentity: E2EPublicIdentity;
@@ -92,7 +92,7 @@ export async function generateE2EIdentity(): Promise<GeneratedE2EIdentity> {
   const ecdhPublicKey = await crypto.subtle.exportKey("jwk", ecdh.publicKey);
   const ecdhPrivateKey = await crypto.subtle.exportKey("jwk", ecdh.privateKey);
   const publicBody = {
-    zener: KEY_TYPE_PUBLIC,
+    sprag: KEY_TYPE_PUBLIC,
     version: VERSION,
     algorithm: E2E_ALGORITHM,
     publicKey: bytesToBase64URL(kem.publicKey),
@@ -101,7 +101,7 @@ export async function generateE2EIdentity(): Promise<GeneratedE2EIdentity> {
   const fingerprint = await publicKeyFingerprint(publicBody);
   const publicIdentity: E2EPublicIdentity = { ...publicBody, fingerprint };
   const privateIdentity: E2EPrivateIdentity = {
-    zener: KEY_TYPE_PRIVATE,
+    sprag: KEY_TYPE_PRIVATE,
     version: VERSION,
     algorithm: E2E_ALGORITHM,
     publicIdentity,
@@ -123,8 +123,8 @@ export function parsePrivateIdentity(raw: string): E2EPrivateIdentity {
   } catch {
     throw new Error("Private key must be valid JSON");
   }
-  if (parsed.zener !== KEY_TYPE_PRIVATE || parsed.version !== VERSION || parsed.algorithm !== E2E_ALGORITHM) {
-    throw new Error("Private key is not a supported Zener E2E key");
+  if (parsed.sprag !== KEY_TYPE_PRIVATE || parsed.version !== VERSION || parsed.algorithm !== E2E_ALGORITHM) {
+    throw new Error("Private key is not a supported Sprag E2E key");
   }
   if (!parsed.secretKey || !parsed.ecdhPrivateKey || !parsed.publicIdentity) {
     throw new Error("Private key is missing key material");
@@ -143,8 +143,8 @@ export function parsePublicIdentity(raw: string): E2EPublicIdentity {
   } catch {
     throw new Error("Public key must be valid JSON");
   }
-  if (parsed.zener !== KEY_TYPE_PUBLIC || parsed.version !== VERSION || parsed.algorithm !== E2E_ALGORITHM) {
-    throw new Error("Public key is not a supported Zener E2E key");
+  if (parsed.sprag !== KEY_TYPE_PUBLIC || parsed.version !== VERSION || parsed.algorithm !== E2E_ALGORITHM) {
+    throw new Error("Public key is not a supported Sprag E2E key");
   }
   if (!parsed.publicKey || !parsed.ecdhPublicKey || !parsed.fingerprint) {
     throw new Error("Public key is missing key material");
@@ -161,7 +161,7 @@ export async function encryptFileForPage(file: File, page: E2EPageConfig): Promi
     throw new Error("E2E public key fingerprint mismatch");
   }
   const verifiedFingerprint = await publicKeyFingerprint({
-    zener: publicIdentity.zener,
+    sprag: publicIdentity.sprag,
     version: publicIdentity.version,
     algorithm: publicIdentity.algorithm,
     publicKey: publicIdentity.publicKey,
@@ -219,7 +219,7 @@ export async function encryptFileForPage(file: File, page: E2EPageConfig): Promi
     encrypted_metadata: bytesToBase64URL(new Uint8Array(encryptedMetadata))
   };
   return {
-    uploadFile: new File([new Uint8Array(ciphertext)], `${crypto.randomUUID()}.zener`, { type: "application/octet-stream" }),
+    uploadFile: new File([new Uint8Array(ciphertext)], `${crypto.randomUUID()}.sprag`, { type: "application/octet-stream" }),
     envelope: JSON.stringify(envelope)
   };
 }
@@ -315,12 +315,12 @@ async function deriveAESKey(sharedMaterial: Uint8Array, salt: Uint8Array, info: 
 }
 
 function aad(purpose: string, coreEnvelope: object): Uint8Array<ArrayBuffer> {
-  return bufferSource(textEncoder.encode(`Zener E2E ${purpose} v1\0${canonicalJSONString(coreEnvelope)}`));
+  return bufferSource(textEncoder.encode(`Sprag E2E ${purpose} v1\0${canonicalJSONString(coreEnvelope)}`));
 }
 
 async function kdfInfo(purpose: string, coreEnvelope: object): Promise<Uint8Array<ArrayBuffer>> {
   const digest = await crypto.subtle.digest("SHA-512", textEncoder.encode(canonicalJSONString(coreEnvelope)));
-  return concatBytes(textEncoder.encode(`Zener E2E ${purpose} v1\0`), new Uint8Array(digest));
+  return concatBytes(textEncoder.encode(`Sprag E2E ${purpose} v1\0`), new Uint8Array(digest));
 }
 
 function canonicalJSONString(value: unknown): string {

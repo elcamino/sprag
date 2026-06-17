@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elcamino/sprag/internal/ids"
 	sqlite "modernc.org/sqlite"
 )
 
@@ -108,17 +109,19 @@ type PageUpdate struct {
 }
 
 type Upload struct {
-	ID                  int64     `json:"id"`
-	PageID              int64     `json:"page_id"`
-	S3Key               string    `json:"-"`
-	OriginalName        string    `json:"name"`
-	SizeBytes           int64     `json:"size"`
-	ContentType         string    `json:"content_type,omitempty"`
-	UploaderIP          string    `json:"uploader_ip,omitempty"`
-	EncryptionMode      string    `json:"encryption_mode,omitempty"`
-	EncryptionAlgorithm string    `json:"encryption_algorithm,omitempty"`
-	EncryptionEnvelope  string    `json:"encryption_envelope,omitempty"`
-	UploadedAt          time.Time `json:"uploaded_at"`
+	ID                   int64      `json:"id"`
+	PageID               int64      `json:"page_id"`
+	S3Key                string     `json:"-"`
+	OriginalName         string     `json:"name"`
+	SizeBytes            int64      `json:"size"`
+	ContentType          string     `json:"content_type,omitempty"`
+	UploaderIP           string     `json:"uploader_ip,omitempty"`
+	SubmissionID         string     `json:"submission_id,omitempty"`
+	SubmissionUploadedAt *time.Time `json:"submission_uploaded_at,omitempty"`
+	EncryptionMode       string     `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm  string     `json:"encryption_algorithm,omitempty"`
+	EncryptionEnvelope   string     `json:"encryption_envelope,omitempty"`
+	UploadedAt           time.Time  `json:"uploaded_at"`
 }
 
 type UploadCreate struct {
@@ -128,9 +131,24 @@ type UploadCreate struct {
 	SizeBytes           int64
 	ContentType         string
 	UploaderIP          string
+	SubmissionID        string
 	EncryptionMode      string
 	EncryptionAlgorithm string
 	EncryptionEnvelope  string
+}
+
+type SubmissionEnvelope struct {
+	ID         int64
+	PageID     int64
+	PublicID   string
+	UploaderIP string
+	CreatedAt  time.Time
+}
+
+type SubmissionEnvelopeCreate struct {
+	PageID     int64
+	PublicID   string
+	UploaderIP string
 }
 
 func Open(ctx context.Context, path string) (*SQLite, error) {
@@ -192,9 +210,18 @@ CREATE TABLE IF NOT EXISTS pages (
   e2e_public_key_fingerprint TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE TABLE IF NOT EXISTS submission_envelopes (
+  id INTEGER PRIMARY KEY,
+  page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  public_id TEXT NOT NULL,
+  uploader_ip TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(page_id, public_id)
+);
 CREATE TABLE IF NOT EXISTS uploads (
   id INTEGER PRIMARY KEY,
   page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  submission_envelope_id INTEGER REFERENCES submission_envelopes(id) ON DELETE SET NULL,
   s3_key TEXT NOT NULL,
   original_name TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
@@ -205,6 +232,7 @@ CREATE TABLE IF NOT EXISTS uploads (
   encryption_envelope TEXT,
   uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE INDEX IF NOT EXISTS idx_submission_envelopes_page ON submission_envelopes(page_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC);
 `)
 	if err != nil {
@@ -219,6 +247,7 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		{"pages", "e2e_algorithm", "TEXT"},
 		{"pages", "e2e_public_key", "TEXT"},
 		{"pages", "e2e_public_key_fingerprint", "TEXT"},
+		{"uploads", "submission_envelope_id", "INTEGER REFERENCES submission_envelopes(id) ON DELETE SET NULL"},
 		{"uploads", "encryption_mode", "TEXT"},
 		{"uploads", "encryption_algorithm", "TEXT"},
 		{"uploads", "encryption_envelope", "TEXT"},
@@ -226,6 +255,12 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		if err := s.ensureColumn(ctx, column.table, column.name, column.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_uploads_submission ON uploads(submission_envelope_id, uploaded_at DESC)`); err != nil {
+		return err
+	}
+	if err := s.backfillSubmissionEnvelopes(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -376,12 +411,52 @@ func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (s *SQLite) EnsureSubmissionEnvelope(ctx context.Context, in SubmissionEnvelopeCreate) (SubmissionEnvelope, error) {
+	if in.PageID == 0 {
+		return SubmissionEnvelope{}, fmt.Errorf("page id is required")
+	}
+	if in.PublicID == "" {
+		return SubmissionEnvelope{}, fmt.Errorf("submission id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT OR IGNORE INTO submission_envelopes (page_id, public_id, uploader_ip)
+VALUES (?, ?, nullif(?, ''))`, in.PageID, in.PublicID, in.UploaderIP)
+	if err != nil {
+		return SubmissionEnvelope{}, err
+	}
+	return s.GetSubmissionEnvelope(ctx, in.PageID, in.PublicID)
+}
+
+func (s *SQLite) GetSubmissionEnvelope(ctx context.Context, pageID int64, publicID string) (SubmissionEnvelope, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, page_id, public_id, coalesce(uploader_ip, ''), created_at
+FROM submission_envelopes
+WHERE page_id = ? AND public_id = ?`, pageID, publicID)
+	return scanSubmissionEnvelope(row)
+}
+
 func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, error) {
+	submissionID := in.SubmissionID
+	if strings.TrimSpace(submissionID) == "" {
+		generated, err := ids.NewUUID()
+		if err != nil {
+			return Upload{}, err
+		}
+		submissionID = generated
+	}
+	envelope, err := s.EnsureSubmissionEnvelope(ctx, SubmissionEnvelopeCreate{
+		PageID:     in.PageID,
+		PublicID:   submissionID,
+		UploaderIP: in.UploaderIP,
+	})
+	if err != nil {
+		return Upload{}, err
+	}
 	res, err := s.db.ExecContext(ctx, `
-INSERT INTO uploads (page_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
+INSERT INTO uploads (page_id, submission_envelope_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
                      encryption_mode, encryption_algorithm, encryption_envelope)
-VALUES (?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
-		in.PageID, in.S3Key, in.OriginalName, in.SizeBytes, in.ContentType, in.UploaderIP,
+VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		in.PageID, envelope.ID, in.S3Key, in.OriginalName, in.SizeBytes, in.ContentType, in.UploaderIP,
 		in.EncryptionMode, in.EncryptionAlgorithm, in.EncryptionEnvelope)
 	if err != nil {
 		return Upload{}, err
@@ -395,12 +470,14 @@ VALUES (?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), 
 
 func (s *SQLite) ListUploads(ctx context.Context, pageID int64) ([]Upload, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''),
-       coalesce(encryption_mode, ''), coalesce(encryption_algorithm, ''), coalesce(encryption_envelope, ''),
-       uploaded_at
-FROM uploads
-WHERE page_id = ?
-ORDER BY uploaded_at DESC, id DESC`, pageID)
+SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
+       coalesce(se.public_id, ''), se.created_at,
+       coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       u.uploaded_at
+FROM uploads u
+LEFT JOIN submission_envelopes se ON se.id = u.submission_envelope_id
+WHERE u.page_id = ?
+ORDER BY coalesce(se.created_at, u.uploaded_at) DESC, se.id DESC, u.uploaded_at DESC, u.id DESC`, pageID)
 	if err != nil {
 		return nil, err
 	}
@@ -418,11 +495,13 @@ ORDER BY uploaded_at DESC, id DESC`, pageID)
 
 func (s *SQLite) GetUpload(ctx context.Context, pageID, uploadID int64) (Upload, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, page_id, s3_key, original_name, size_bytes, coalesce(content_type, ''), coalesce(uploader_ip, ''),
-       coalesce(encryption_mode, ''), coalesce(encryption_algorithm, ''), coalesce(encryption_envelope, ''),
-       uploaded_at
-FROM uploads
-WHERE page_id = ? AND id = ?`, pageID, uploadID)
+SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
+       coalesce(se.public_id, ''), se.created_at,
+       coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       u.uploaded_at
+FROM uploads u
+LEFT JOIN submission_envelopes se ON se.id = u.submission_envelope_id
+WHERE u.page_id = ? AND u.id = ?`, pageID, uploadID)
 	return scanUpload(row)
 }
 
@@ -478,10 +557,30 @@ func scanPage(row scanner) (Page, error) {
 	return page, nil
 }
 
+func scanSubmissionEnvelope(row scanner) (SubmissionEnvelope, error) {
+	var envelope SubmissionEnvelope
+	var created string
+	err := row.Scan(&envelope.ID, &envelope.PageID, &envelope.PublicID, &envelope.UploaderIP, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SubmissionEnvelope{}, ErrNotFound
+	}
+	if err != nil {
+		return SubmissionEnvelope{}, err
+	}
+	parsed, err := parseDBTime(created)
+	if err != nil {
+		return SubmissionEnvelope{}, err
+	}
+	envelope.CreatedAt = parsed
+	return envelope, nil
+}
+
 func scanUpload(row scanner) (Upload, error) {
 	var upload Upload
+	var submissionCreated sql.NullString
 	var uploaded string
 	err := row.Scan(&upload.ID, &upload.PageID, &upload.S3Key, &upload.OriginalName, &upload.SizeBytes, &upload.ContentType, &upload.UploaderIP,
+		&upload.SubmissionID, &submissionCreated,
 		&upload.EncryptionMode, &upload.EncryptionAlgorithm, &upload.EncryptionEnvelope, &uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Upload{}, ErrNotFound
@@ -493,8 +592,37 @@ func scanUpload(row scanner) (Upload, error) {
 	if err != nil {
 		return Upload{}, err
 	}
+	if submissionCreated.Valid && submissionCreated.String != "" {
+		created, err := parseDBTime(submissionCreated.String)
+		if err != nil {
+			return Upload{}, err
+		}
+		upload.SubmissionUploadedAt = &created
+	}
 	upload.UploadedAt = parsed
 	return upload, nil
+}
+
+func (s *SQLite) backfillSubmissionEnvelopes(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO submission_envelopes (page_id, public_id, uploader_ip, created_at)
+SELECT u.page_id, 'legacy-' || u.id, u.uploader_ip, u.uploaded_at
+FROM uploads u
+WHERE u.submission_envelope_id IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM submission_envelopes se
+    WHERE se.page_id = u.page_id AND se.public_id = 'legacy-' || u.id
+  );
+UPDATE uploads
+SET submission_envelope_id = (
+  SELECT se.id
+  FROM submission_envelopes se
+  WHERE se.page_id = uploads.page_id AND se.public_id = 'legacy-' || uploads.id
+)
+WHERE submission_envelope_id IS NULL;
+`)
+	return err
 }
 
 func parseDBTime(raw string) (time.Time, error) {

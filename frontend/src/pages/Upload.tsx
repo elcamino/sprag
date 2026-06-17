@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -76,6 +76,7 @@ export default function Upload() {
 
   async function enqueue(files: File[]) {
     if (!page) return;
+    const submissionID = crypto.randomUUID();
     const accepted = files.map((file) => validateClientFile(file, page));
     const next = accepted.map(({ file, error }) => ({
       id: crypto.randomUUID(),
@@ -90,11 +91,13 @@ export default function Upload() {
     }) satisfies UploadState);
     setUploads((current) => [...next, ...current]);
     await Promise.all(
-      accepted.map(({ file, error }, index) => (error ? Promise.resolve() : prepareAndUpload(file, next[index].id)))
+      accepted.map(({ file, error }, index) =>
+        error ? Promise.resolve() : prepareAndUpload(file, next[index].id, submissionID)
+      )
     );
   }
 
-  async function prepareAndUpload(file: File, id: string) {
+  async function prepareAndUpload(file: File, id: string, submissionID: string) {
     if (!page) return;
     let uploadFile = file;
     let envelope: string | undefined;
@@ -113,14 +116,15 @@ export default function Upload() {
         return;
       }
     }
-    await uploadFileToServer(uploadFile, id, envelope);
+    await uploadFileToServer(uploadFile, id, submissionID, envelope);
   }
 
-  function uploadFileToServer(file: File, id: string, envelope?: string) {
+  function uploadFileToServer(file: File, id: string, submissionID: string, envelope?: string) {
     return new Promise<void>((resolve) => {
       const xhr = new XMLHttpRequest();
       const form = new FormData();
       const estimator = createTransferEstimator();
+      form.append("submission_id", submissionID);
       if (envelope) {
         form.append("e2e_envelope", envelope);
       }
@@ -174,7 +178,7 @@ export default function Upload() {
   }
 
   if (!page) {
-    return <main className="route-loading">Zener</main>;
+    return <main className="route-loading">Sprag</main>;
   }
 
   const locked = page.pin_required && !pinUnlocked;
@@ -187,7 +191,7 @@ export default function Upload() {
             <FileUp size={22} />
           </span>
           <div>
-            <p className="eyebrow">Zener</p>
+            <p className="eyebrow">Sprag</p>
             <h1>{page.title}</h1>
             {page.description && <p>{page.description}</p>}
           </div>

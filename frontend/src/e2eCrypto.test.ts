@@ -1,5 +1,5 @@
 /*
- * Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+ * Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
  * Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -33,7 +33,10 @@ describe("E2E crypto", () => {
     const exported = exportPrivateIdentity(identity);
     const imported = parsePrivateIdentity(exported);
     const publicIdentity = publicIdentityFromPrivate(imported);
+    const parsedExport = JSON.parse(exported) as { sprag?: string; publicIdentity?: { sprag?: string } };
 
+    expect(parsedExport.sprag).toBe("e2e-private-key");
+    expect(parsedExport.publicIdentity?.sprag).toBe("e2e-public-key");
     expect(imported.algorithm).toBe(E2E_ALGORITHM);
     expect(publicIdentity.publicKey).toBe(identity.publicIdentity.publicKey);
     expect(publicIdentity.fingerprint).toBe(identity.publicIdentity.fingerprint);
@@ -55,6 +58,7 @@ describe("E2E crypto", () => {
     });
 
     expect(encrypted.uploadFile.name).not.toContain("privileged-report.pdf");
+    expect(encrypted.uploadFile.name).toMatch(/\.sprag$/);
     expect(encrypted.uploadFile.type).toBe("application/octet-stream");
     expect(encrypted.envelope).not.toContain("privileged-report.pdf");
     expect(encrypted.envelope).toContain(identity.publicIdentity.fingerprint);

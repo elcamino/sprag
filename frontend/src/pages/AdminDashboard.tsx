@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -34,6 +34,7 @@ import {
   DownloadUnlockPrompt,
   downloadUnlockPromptActive,
   filesVisibleForSelectedPage,
+  groupFilesBySubmission,
   LoadedFiles,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
@@ -91,6 +92,7 @@ export default function AdminDashboard() {
 
   const selected = useMemo(() => selectedPageForID(pages, selectedID), [pages, selectedID]);
   const files = useMemo(() => filesVisibleForSelectedPage(loadedFiles, selected), [loadedFiles, selected]);
+  const fileGroups = useMemo(() => groupFilesBySubmission(files), [files]);
   const selectedPrivateKey = selected ? (pagePrivateKeys[selected.id] ?? "") : "";
   const selectedStoredKeyControl = privateKeyControlState(selectedPrivateKey);
   const selectedDownloadUnlockPrompt = selected ? downloadUnlockPromptActive(downloadUnlockPrompt, selected.id) : false;
@@ -335,7 +337,7 @@ export default function AdminDashboard() {
     <main className="admin-shell">
       <header className="admin-topbar">
         <div>
-          <p className="eyebrow">Zener</p>
+          <p className="eyebrow">Sprag</p>
           <h1>Dropboxes</h1>
         </div>
         <div className="topbar-actions">
@@ -623,29 +625,45 @@ export default function AdminDashboard() {
               </div>
 
               <div className="file-table">
-                {files.map((file) => (
-                  <div className="file-row" key={file.id}>
-                    <span>
-                      <strong>{file.encryption_mode === "e2e-v1" ? "Encrypted upload" : file.name}</strong>
-                      <small>
-                        {formatBytes(file.size)} · {formatDate(file.uploaded_at)}
-                        {file.encryption_mode === "e2e-v1" ? " · E2E" : ""}
-                      </small>
-                    </span>
-                    <span className="file-actions">
-                      {file.encryption_mode === "e2e-v1" ? (
-                        <button className="icon-button" onClick={() => downloadEncryptedFile(file)} title="Decrypt and download">
-                          <FileKey2 size={17} />
-                        </button>
-                      ) : (
-                        <a className="icon-button" href={`/api/admin/pages/${selected.id}/files/${file.id}`} title="Download">
-                          <Download size={17} />
-                        </a>
-                      )}
-                      <button className="icon-button danger" onClick={() => deleteFile(file)} title="Delete file">
-                        <Trash2 size={17} />
-                      </button>
-                    </span>
+                {fileGroups.map((group) => (
+                  <div className="submission-group" key={group.submissionID}>
+                    <div className="submission-header">
+                      <span>
+                        <strong>Submission {shortSubmissionID(group.submissionID)}</strong>
+                        <small>
+                          {group.fileCount} {group.fileCount === 1 ? "file" : "files"} · {formatBytes(group.totalBytes)} ·{" "}
+                          {formatDate(group.uploadedAt)}
+                        </small>
+                      </span>
+                      <code>{group.submissionID}</code>
+                    </div>
+                    <div className="submission-files">
+                      {group.files.map((file) => (
+                        <div className="file-row" key={file.id}>
+                          <span>
+                            <strong>{file.encryption_mode === "e2e-v1" ? "Encrypted upload" : file.name}</strong>
+                            <small>
+                              {formatBytes(file.size)} · {formatDate(file.uploaded_at)}
+                              {file.encryption_mode === "e2e-v1" ? " · E2E" : ""}
+                            </small>
+                          </span>
+                          <span className="file-actions">
+                            {file.encryption_mode === "e2e-v1" ? (
+                              <button className="icon-button" onClick={() => downloadEncryptedFile(file)} title="Decrypt and download">
+                                <FileKey2 size={17} />
+                              </button>
+                            ) : (
+                              <a className="icon-button" href={`/api/admin/pages/${selected.id}/files/${file.id}`} title="Download">
+                                <Download size={17} />
+                              </a>
+                            )}
+                            <button className="icon-button danger" onClick={() => deleteFile(file)} title="Delete file">
+                              <Trash2 size={17} />
+                            </button>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
                 {files.length === 0 && <div className="empty-state">No files yet</div>}
@@ -658,6 +676,10 @@ export default function AdminDashboard() {
       </section>
     </main>
   );
+}
+
+function shortSubmissionID(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8);
 }
 
 function downloadBlob(blob: Blob, filename: string) {

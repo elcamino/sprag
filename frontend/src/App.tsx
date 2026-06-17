@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -41,7 +41,7 @@ export default function App() {
     <>
       {routeKind !== "home" && <BrandMotif />}
       {routeKind !== "admin-dashboard" && <ThemeSwitch fixed />}
-      <Suspense fallback={<div className="route-loading">Zener</div>}>{route}</Suspense>
+      <Suspense fallback={<div className="route-loading">Sprag</div>}>{route}</Suspense>
     </>
   );
 }

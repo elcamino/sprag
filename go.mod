@@ -1,4 +1,4 @@
-module github.com/elcamino/zener
+module github.com/elcamino/sprag
 
 go 1.26
 

@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -29,11 +29,11 @@ import (
 	"syscall"
 	"time"
 
-	zener "github.com/elcamino/zener"
-	"github.com/elcamino/zener/internal/config"
-	httpapi "github.com/elcamino/zener/internal/http"
-	s3store "github.com/elcamino/zener/internal/s3"
-	"github.com/elcamino/zener/internal/store"
+	sprag "github.com/elcamino/sprag"
+	"github.com/elcamino/sprag/internal/config"
+	httpapi "github.com/elcamino/sprag/internal/http"
+	s3store "github.com/elcamino/sprag/internal/s3"
+	"github.com/elcamino/sprag/internal/store"
 )
 
 func main() {
@@ -111,7 +111,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	frontend, err := zener.FrontendFS()
+	frontend, err := sprag.FrontendFS()
 	if err != nil {
 		return err
 	}

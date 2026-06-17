@@ -1,4 +1,4 @@
-// Zener - a post-quantum-safe end-to-end encrypted file dropbox.
+// Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 // Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@ import { argon2idAsync } from "@noble/hashes/argon2.js";
 import { randomBytes } from "@noble/post-quantum/utils.js";
 import { parsePrivateIdentity } from "./e2eCrypto";
 
-const DB_NAME = "zener-e2e-private-keys";
+const DB_NAME = "sprag-e2e-private-keys";
 const DB_VERSION = 1;
 const STORE_NAME = "privateKeys";
 const STORE_RECORD_VERSION = 1;

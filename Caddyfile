@@ -1,14 +1,14 @@
-# Demonstration Caddy config for Zener.
+# Demonstration Caddy config for Sprag.
 #
-# Set ZENER_DOMAIN to your real domain to get automatic HTTPS from Caddy.
+# Set SPRAG_DOMAIN to your real domain to get automatic HTTPS from Caddy.
 # It defaults to localhost for local testing (Caddy issues a local CA cert).
 #
 # Caddy v2 imposes no default request-body cap, so 5 GB uploads pass straight
-# through; the size limit is enforced inside Zener via MAX_FILE_SIZE.
+# through; the size limit is enforced inside Sprag via MAX_FILE_SIZE.
 #
-# Caddy appends the real client address to X-Forwarded-For. Zener is configured
+# Caddy appends the real client address to X-Forwarded-For. Sprag is configured
 # with TRUSTED_PROXY_HOPS=1 so it reads exactly that appended entry and ignores
 # any value a client tries to spoof on the left.
-{$ZENER_DOMAIN:localhost} {
-	reverse_proxy zener-app:8080
+{$SPRAG_DOMAIN:localhost} {
+	reverse_proxy sprag-app:8080
 }

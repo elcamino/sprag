@@ -1,3 +1,4 @@
+/sprag
 /zener
 /data/
 /frontend/node_modules/
@@ -6,5 +7,6 @@
 /.tmp/
 *.db
 .DS_Store
+*.sprag
 *.zener
 key.json
