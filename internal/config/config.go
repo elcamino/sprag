@@ -25,8 +25,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/elcamino/zener/internal/e2e"
 	"github.com/joho/godotenv"
-	"github.com/tob/zener/internal/e2e"
 )
 
 const defaultMaxFileSize int64 = 5 * 1024 * 1024 * 1024

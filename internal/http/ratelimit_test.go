@@ -23,7 +23,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	httpapi "github.com/tob/zener/internal/http"
+	httpapi "github.com/elcamino/zener/internal/http"
 )
 
 // With one trusted proxy hop, an attacker who rotates the spoofable left side of

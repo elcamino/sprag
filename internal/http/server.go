@@ -37,12 +37,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elcamino/zener/internal/blob"
+	"github.com/elcamino/zener/internal/e2e"
+	"github.com/elcamino/zener/internal/ids"
+	"github.com/elcamino/zener/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/tob/zener/internal/blob"
-	"github.com/tob/zener/internal/e2e"
-	"github.com/tob/zener/internal/ids"
-	"github.com/tob/zener/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 

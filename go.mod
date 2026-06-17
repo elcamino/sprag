@@ -1,4 +1,4 @@
-module github.com/tob/zener
+module github.com/elcamino/zener
 
 go 1.26
 

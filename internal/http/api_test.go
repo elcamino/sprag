@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tob/zener/internal/blob"
-	httpapi "github.com/tob/zener/internal/http"
-	"github.com/tob/zener/internal/store"
+	"github.com/elcamino/zener/internal/blob"
+	httpapi "github.com/elcamino/zener/internal/http"
+	"github.com/elcamino/zener/internal/store"
 )
 
 func TestAdminCreatesPageUploaderUploadsAndAdminDownloads(t *testing.T) {

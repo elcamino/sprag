@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tob/zener/internal/config"
+	"github.com/elcamino/zener/internal/config"
 )
 
 func TestLoadFromLookupRejectsMissingRequiredValues(t *testing.T) {

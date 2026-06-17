@@ -20,7 +20,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/tob/zener/internal/ids"
+	"github.com/elcamino/zener/internal/ids"
 )
 
 func TestGenerateSlugIsBase62AndUnique(t *testing.T) {

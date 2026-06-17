@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tob/zener/internal/store"
+	"github.com/elcamino/zener/internal/store"
 )
 
 func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {

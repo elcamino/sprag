@@ -29,11 +29,11 @@ import (
 	"syscall"
 	"time"
 
-	zener "github.com/tob/zener"
-	"github.com/tob/zener/internal/config"
-	httpapi "github.com/tob/zener/internal/http"
-	s3store "github.com/tob/zener/internal/s3"
-	"github.com/tob/zener/internal/store"
+	zener "github.com/elcamino/zener"
+	"github.com/elcamino/zener/internal/config"
+	httpapi "github.com/elcamino/zener/internal/http"
+	s3store "github.com/elcamino/zener/internal/s3"
+	"github.com/elcamino/zener/internal/store"
 )
 
 func main() {
