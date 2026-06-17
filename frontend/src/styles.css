@@ -650,6 +650,71 @@ textarea:focus {
   z-index: 2;
 }
 
+.home-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 50%, var(--accent-soft), transparent 34rem),
+    var(--bg-canvas);
+}
+
+.circuit-line-field {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.home-mark {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: clamp(8rem, 25vw, 19rem);
+  font-weight: 700;
+  line-height: 0.78;
+  letter-spacing: 0;
+  text-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+}
+
+.home-mark::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.home-admin-link {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.86rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px);
+}
+
+.home-admin-link:hover {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+}
+
 .closed-panel {
   width: min(520px, 100%);
   border-radius: 8px;

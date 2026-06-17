@@ -17,20 +17,30 @@
 import { lazy, Suspense } from "react";
 import { BrandMotif } from "./BrandMotif";
 import { ThemeSwitch } from "./ThemeSwitch";
+import { routeForPath } from "./routes";
 
+const Home = lazy(() => import("./pages/Home"));
 const Upload = lazy(() => import("./pages/Upload"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
 
 export default function App() {
-  const path = window.location.pathname;
-  const isDashboard = path.startsWith("/admin") && path !== "/admin" && path !== "/admin/";
-  const route = path.startsWith("/admin") ? (isDashboard ? <AdminDashboard /> : <AdminLogin />) : <Upload />;
+  const routeKind = routeForPath(window.location.pathname);
+  const route =
+    routeKind === "home" ? (
+      <Home />
+    ) : routeKind === "admin-login" ? (
+      <AdminLogin />
+    ) : routeKind === "admin-dashboard" ? (
+      <AdminDashboard />
+    ) : (
+      <Upload />
+    );
 
   return (
     <>
-      <BrandMotif />
-      {!isDashboard && <ThemeSwitch fixed />}
+      {routeKind !== "home" && <BrandMotif />}
+      {routeKind !== "admin-dashboard" && <ThemeSwitch fixed />}
       <Suspense fallback={<div className="route-loading">Zener</div>}>{route}</Suspense>
     </>
   );
