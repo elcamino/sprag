@@ -51,6 +51,8 @@ export type UploadFile = {
   encryption_mode?: string;
   encryption_algorithm?: string;
   encryption_envelope?: string;
+  object_sha512?: string;
+  object_hash_algorithm?: string;
   receipt_token?: string;
   receipt_status?: ReceiptStatus;
   receipt_status_updated_at?: string;

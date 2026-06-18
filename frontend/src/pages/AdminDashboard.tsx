@@ -22,6 +22,7 @@ import {
   Download,
   FileKey2,
   FileDown,
+  FileText,
   KeyRound,
   LogOut,
   Plus,
@@ -639,6 +640,10 @@ export default function AdminDashboard() {
                     Zip
                   </a>
                 )}
+                <a className="secondary-action" href={`/api/admin/pages/${selected.id}/manifest`}>
+                  <FileText size={17} />
+                  Manifest
+                </a>
               </div>
 
               <div className="file-table">

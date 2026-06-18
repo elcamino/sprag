@@ -22,7 +22,9 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,6 +202,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 		r.Get("/api/admin/pages/{pageID}/files/{fileID}", s.handleDownloadFile)
 		r.With(s.requireCSRF).Delete("/api/admin/pages/{pageID}/files/{fileID}", s.handleDeleteFile)
 		r.Get("/api/admin/pages/{pageID}/zip", s.handleZip)
+		r.Get("/api/admin/pages/{pageID}/manifest", s.handleManifest)
 		r.With(s.requireCSRF).Patch("/api/admin/pages/{pageID}/submissions/{submissionID}/receipt", s.handleUpdateReceiptStatus)
 	})
 
@@ -386,6 +389,15 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("download stream failed", "upload_id", upload.ID, "error", err)
 		panic(http.ErrAbortHandler)
 	}
+	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+		PageID:    pageID,
+		UploadID:  &upload.ID,
+		EventType: "file.downloaded",
+		Actor:     "admin",
+		Detail:    jsonDetail(map[string]any{"bytes": upload.SizeBytes}),
+	}); err != nil {
+		s.logger.Error("record custody event failed", "upload_id", upload.ID, "event_type", "file.downloaded", "error", err)
+	}
 }
 
 func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
@@ -482,6 +494,39 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
+	pageID, ok := parseIDParam(w, r, "pageID")
+	if !ok {
+		return
+	}
+	page, err := s.store.GetPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	uploads, err := s.store.ListUploads(r.Context(), pageID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	events, err := s.store.ListCustodyEvents(r.Context(), pageID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+
+	filename := safeArchiveName(page.Title)
+	if filename == "" {
+		filename = page.Slug
+	}
+	w.Header().Set("Content-Disposition", contentDisposition(filename+"-manifest.json"))
+	writeJSON(w, http.StatusOK, buildCustodyManifest(page, uploads, events, s.clock()))
+}
+
 func (s *Server) handlePublicReceipt(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(chi.URLParam(r, "receiptToken"))
 	receipt, err := s.store.GetReceipt(r.Context(), token)
@@ -528,6 +573,16 @@ func (s *Server) handleUpdateReceiptStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+		PageID:               pageID,
+		SubmissionEnvelopeID: &envelope.ID,
+		EventType:            "receipt.status_updated",
+		Actor:                "admin",
+		Detail:               jsonDetail(map[string]any{"status": envelope.ReceiptStatus}),
+	}); err != nil {
 		s.serverError(w, err)
 		return
 	}
@@ -669,13 +724,15 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	key := s.objectKey(page.Slug, uploadID, storedName)
 	counting := &countingLimitReader{r: part, remaining: limit}
-	if err := s.blobs.Upload(r.Context(), key, counting, contentType); errors.Is(err, errTooLarge) {
+	objectHash := sha512.New()
+	if err := s.blobs.Upload(r.Context(), key, io.TeeReader(counting, objectHash), contentType); errors.Is(err, errTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds the configured size limit")
 		return
 	} else if err != nil {
 		s.serverError(w, err)
 		return
 	}
+	objectSHA512 := hex.EncodeToString(objectHash.Sum(nil))
 	upload, err := s.store.CreateUpload(r.Context(), store.UploadCreate{
 		PageID:              page.ID,
 		S3Key:               key,
@@ -687,6 +744,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		EncryptionMode:      encryptionMode,
 		EncryptionAlgorithm: encryptionAlgorithm,
 		EncryptionEnvelope:  encryptionEnvelope,
+		ObjectSHA512:        objectSHA512,
 	})
 	if err != nil {
 		s.serverError(w, err)
@@ -909,6 +967,52 @@ type publicE2EResponse struct {
 	PublicKeyFingerprint string `json:"public_key_fingerprint"`
 }
 
+type custodyManifest struct {
+	Version     int                    `json:"version"`
+	GeneratedAt time.Time              `json:"generated_at"`
+	Page        custodyManifestPage    `json:"page"`
+	Files       []custodyManifestFile  `json:"files"`
+	HandlingLog []custodyManifestEvent `json:"handling_log"`
+}
+
+type custodyManifestPage struct {
+	ID                      int64  `json:"id"`
+	Slug                    string `json:"slug"`
+	Title                   string `json:"title"`
+	E2EEnabled              bool   `json:"e2e_enabled"`
+	E2EAlgorithm            string `json:"e2e_algorithm,omitempty"`
+	E2EPublicKeyFingerprint string `json:"e2e_public_key_fingerprint,omitempty"`
+}
+
+type custodyManifestFile struct {
+	ID                  int64      `json:"id"`
+	PageID              int64      `json:"page_id"`
+	SubmissionID        string     `json:"submission_id,omitempty"`
+	Name                string     `json:"name"`
+	Size                int64      `json:"size"`
+	ContentType         string     `json:"content_type,omitempty"`
+	UploaderIP          string     `json:"uploader_ip,omitempty"`
+	ObjectKey           string     `json:"object_key"`
+	ObjectSHA512        string     `json:"object_sha512,omitempty"`
+	ObjectHashAlgorithm string     `json:"object_hash_algorithm,omitempty"`
+	ObjectHashScope     string     `json:"object_hash_scope,omitempty"`
+	EncryptionMode      string     `json:"encryption_mode,omitempty"`
+	EncryptionAlgorithm string     `json:"encryption_algorithm,omitempty"`
+	UploadedAt          time.Time  `json:"uploaded_at"`
+	DownloadedAt        *time.Time `json:"downloaded_at,omitempty"`
+}
+
+type custodyManifestEvent struct {
+	ID           int64           `json:"id"`
+	PageID       int64           `json:"page_id"`
+	UploadID     *int64          `json:"upload_id,omitempty"`
+	SubmissionID string          `json:"submission_id,omitempty"`
+	EventType    string          `json:"event_type"`
+	Actor        string          `json:"actor"`
+	Detail       json.RawMessage `json:"detail,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
 func (s *Server) pageResponse(page store.Page) pageResponse {
 	return pageResponse{
 		ID:                      page.ID,
@@ -932,6 +1036,102 @@ func publicE2E(page store.Page) *publicE2EResponse {
 		PublicKey:            page.E2EPublicKey,
 		PublicKeyFingerprint: page.E2EPublicKeyFingerprint,
 	}
+}
+
+func buildCustodyManifest(page store.Page, uploads []store.Upload, events []store.CustodyEvent, generatedAt time.Time) custodyManifest {
+	downloadedAt := map[int64]time.Time{}
+	for _, event := range events {
+		if event.EventType != "file.downloaded" || event.UploadID == nil {
+			continue
+		}
+		if current, ok := downloadedAt[*event.UploadID]; !ok || event.CreatedAt.After(current) {
+			downloadedAt[*event.UploadID] = event.CreatedAt
+		}
+	}
+
+	files := make([]custodyManifestFile, 0, len(uploads))
+	for _, upload := range uploads {
+		var downloaded *time.Time
+		if t, ok := downloadedAt[upload.ID]; ok {
+			copy := t
+			downloaded = &copy
+		}
+		files = append(files, custodyManifestFile{
+			ID:                  upload.ID,
+			PageID:              upload.PageID,
+			SubmissionID:        upload.SubmissionID,
+			Name:                upload.OriginalName,
+			Size:                upload.SizeBytes,
+			ContentType:         upload.ContentType,
+			UploaderIP:          upload.UploaderIP,
+			ObjectKey:           upload.S3Key,
+			ObjectSHA512:        upload.ObjectSHA512,
+			ObjectHashAlgorithm: upload.ObjectHashAlgorithm,
+			ObjectHashScope:     objectHashScope(upload),
+			EncryptionMode:      upload.EncryptionMode,
+			EncryptionAlgorithm: upload.EncryptionAlgorithm,
+			UploadedAt:          upload.UploadedAt,
+			DownloadedAt:        downloaded,
+		})
+	}
+
+	log := make([]custodyManifestEvent, 0, len(events))
+	for _, event := range events {
+		log = append(log, custodyManifestEvent{
+			ID:           event.ID,
+			PageID:       event.PageID,
+			UploadID:     event.UploadID,
+			SubmissionID: event.SubmissionID,
+			EventType:    event.EventType,
+			Actor:        event.Actor,
+			Detail:       rawJSONDetail(event.Detail),
+			CreatedAt:    event.CreatedAt,
+		})
+	}
+
+	return custodyManifest{
+		Version:     1,
+		GeneratedAt: generatedAt.UTC(),
+		Page: custodyManifestPage{
+			ID:                      page.ID,
+			Slug:                    page.Slug,
+			Title:                   page.Title,
+			E2EEnabled:              page.E2EEnabled,
+			E2EAlgorithm:            page.E2EAlgorithm,
+			E2EPublicKeyFingerprint: page.E2EPublicKeyFingerprint,
+		},
+		Files:       files,
+		HandlingLog: log,
+	}
+}
+
+func objectHashScope(upload store.Upload) string {
+	if upload.ObjectSHA512 == "" {
+		return ""
+	}
+	if upload.EncryptionMode == e2e.UploadMode {
+		return "stored-ciphertext"
+	}
+	return "stored-plaintext"
+}
+
+func jsonDetail(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func rawJSONDetail(raw string) json.RawMessage {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if !json.Valid([]byte(raw)) {
+		return json.RawMessage(`{"raw":` + strconv.Quote(raw) + `}`)
+	}
+	return json.RawMessage(raw)
 }
 
 type pageE2EIdentity struct {

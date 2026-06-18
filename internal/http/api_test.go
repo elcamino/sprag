@@ -22,7 +22,9 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -287,6 +289,162 @@ func TestAdminCanUpdateReceiptStatusOnly(t *testing.T) {
 	}
 	if !strings.Contains(badStatus.Body.String(), "invalid_receipt_status") {
 		t.Fatalf("expected invalid_receipt_status error, got %s", badStatus.Body.String())
+	}
+}
+
+func TestAdminManifestIncludesStoredObjectHashesAndHandlingLog(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Manifest intake"})
+
+	body := []byte("manifest body")
+	upload := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"submission_id": "77777777-7777-4777-8777-777777777777",
+	}, "file", "manifest.pdf", body, nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+	wantHash := sha512Hex(body)
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	var listed []struct {
+		ObjectSHA512        string `json:"object_sha512"`
+		ObjectHashAlgorithm string `json:"object_hash_algorithm"`
+	}
+	decodeJSON(t, files.Body.Bytes(), &listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected one file, got %d", len(listed))
+	}
+	if listed[0].ObjectHashAlgorithm != "SHA-512" || listed[0].ObjectSHA512 != wantHash {
+		t.Fatalf("listed hash = %q/%q, want SHA-512/%q", listed[0].ObjectHashAlgorithm, listed[0].ObjectSHA512, wantHash)
+	}
+
+	download := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files/1", nil, session, nil)
+	if download.Code != http.StatusOK {
+		t.Fatalf("download status = %d body=%s", download.Code, download.Body.String())
+	}
+
+	manifest := perform(t, handler, http.MethodGet, "/api/admin/pages/1/manifest", nil, session, nil)
+	if manifest.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d body=%s", manifest.Code, manifest.Body.String())
+	}
+	if got := manifest.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("manifest content type = %q, want JSON", got)
+	}
+	var data struct {
+		Version int `json:"version"`
+		Page    struct {
+			ID    int64  `json:"id"`
+			Title string `json:"title"`
+		} `json:"page"`
+		Files []struct {
+			ID                  int64  `json:"id"`
+			SubmissionID        string `json:"submission_id"`
+			Name                string `json:"name"`
+			ObjectKey           string `json:"object_key"`
+			ObjectSHA512        string `json:"object_sha512"`
+			ObjectHashAlgorithm string `json:"object_hash_algorithm"`
+			DownloadedAt        string `json:"downloaded_at"`
+		} `json:"files"`
+		HandlingLog []struct {
+			EventType    string `json:"event_type"`
+			Actor        string `json:"actor"`
+			UploadID     int64  `json:"upload_id,omitempty"`
+			SubmissionID string `json:"submission_id,omitempty"`
+			CreatedAt    string `json:"created_at"`
+		} `json:"handling_log"`
+	}
+	decodeJSON(t, manifest.Body.Bytes(), &data)
+	if data.Version != 1 || data.Page.ID != 1 || data.Page.Title != "Manifest intake" {
+		t.Fatalf("unexpected manifest header: %#v", data)
+	}
+	if len(data.Files) != 1 {
+		t.Fatalf("expected one manifest file, got %d", len(data.Files))
+	}
+	file := data.Files[0]
+	if file.Name != "manifest.pdf" || file.SubmissionID == "" || file.ObjectKey == "" || file.DownloadedAt == "" {
+		t.Fatalf("manifest file missing expected metadata: %#v", file)
+	}
+	if file.ObjectHashAlgorithm != "SHA-512" || file.ObjectSHA512 != wantHash {
+		t.Fatalf("manifest hash = %q/%q, want SHA-512/%q", file.ObjectHashAlgorithm, file.ObjectSHA512, wantHash)
+	}
+	events := map[string]bool{}
+	for _, event := range data.HandlingLog {
+		if event.CreatedAt == "" {
+			t.Fatalf("event missing created_at: %#v", event)
+		}
+		events[event.EventType] = true
+	}
+	for _, want := range []string{"upload.accepted", "file.downloaded"} {
+		if !events[want] {
+			t.Fatalf("manifest missing %s event in %#v", want, data.HandlingLog)
+		}
+	}
+
+	var created struct {
+		ReceiptURL string `json:"receipt_url"`
+	}
+	decodeJSON(t, upload.Body.Bytes(), &created)
+	token := created.ReceiptURL[strings.LastIndex(created.ReceiptURL, "/")+1:]
+	receipt := perform(t, handler, http.MethodGet, "/api/r/"+token, nil, nil, nil)
+	if receipt.Code != http.StatusOK {
+		t.Fatalf("receipt status = %d body=%s", receipt.Code, receipt.Body.String())
+	}
+	if strings.Contains(receipt.Body.String(), wantHash) || strings.Contains(receipt.Body.String(), "sha512") || strings.Contains(receipt.Body.String(), "SHA-512") {
+		t.Fatalf("public receipt leaked hash material: %s", receipt.Body.String())
+	}
+}
+
+func TestE2EManifestHashesStoredCiphertextWithoutPlaintextName(t *testing.T) {
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.E2EIntake.Enabled = true
+		c.E2EIntake.Algorithm = "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM"
+	})
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{
+		"title":                      "Encrypted manifest",
+		"e2e_public_key":             `{"sprag":"e2e-public-key","version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","publicKey":"pub","fingerprint":"sha256:test"}`,
+		"e2e_public_key_fingerprint": "sha256:test",
+		"e2e_algorithm":              "ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM",
+	})
+	envelope := `{"version":1,"algorithm":"ML-KEM-1024-P384-HKDF-SHA512-AES-256-GCM","public_key_fingerprint":"sha256:test","kem_ciphertext":"Y3Q","ecdh_ephemeral_public_key":"e30","salt":"c2FsdA","file_nonce":"ZmlsZQ","metadata_nonce":"bWV0YQ","encrypted_metadata":"c2VhbGVk"}`
+	ciphertext := []byte("opaque ciphertext")
+	upload := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"e2e_envelope": envelope,
+	}, "file", "privileged-report.pdf", ciphertext, nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("encrypted upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+
+	manifest := perform(t, handler, http.MethodGet, "/api/admin/pages/1/manifest", nil, session, nil)
+	if manifest.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d body=%s", manifest.Code, manifest.Body.String())
+	}
+	if strings.Contains(manifest.Body.String(), "privileged-report.pdf") {
+		t.Fatalf("manifest leaked plaintext E2E filename: %s", manifest.Body.String())
+	}
+	var data struct {
+		Files []struct {
+			Name                string `json:"name"`
+			EncryptionMode      string `json:"encryption_mode"`
+			ObjectSHA512        string `json:"object_sha512"`
+			ObjectHashAlgorithm string `json:"object_hash_algorithm"`
+			ObjectHashScope     string `json:"object_hash_scope"`
+		} `json:"files"`
+	}
+	decodeJSON(t, manifest.Body.Bytes(), &data)
+	if len(data.Files) != 1 {
+		t.Fatalf("expected one manifest file, got %d", len(data.Files))
+	}
+	file := data.Files[0]
+	if file.EncryptionMode != "e2e-v1" || file.ObjectHashScope != "stored-ciphertext" {
+		t.Fatalf("unexpected E2E manifest file metadata: %#v", file)
+	}
+	if file.ObjectHashAlgorithm != "SHA-512" || file.ObjectSHA512 != sha512Hex(ciphertext) {
+		t.Fatalf("manifest hash = %q/%q, want SHA-512/%q", file.ObjectHashAlgorithm, file.ObjectSHA512, sha512Hex(ciphertext))
 	}
 }
 
@@ -1020,6 +1178,11 @@ func expectedIPDigest(secret []byte, ip string) string {
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(ip))
 	return "ip-hmac-sha256:v1:" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func sha512Hex(data []byte) string {
+	sum := sha512.Sum512(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func csrfHeader() map[string]string {

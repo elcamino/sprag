@@ -55,6 +55,7 @@ func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {
 		ContentType:  "application/pdf",
 		UploaderIP:   "203.0.113.7",
 		SubmissionID: submissionID,
+		ObjectSHA512: "hash-one",
 	}); err != nil {
 		t.Fatalf("CreateUpload failed: %v", err)
 	}
@@ -66,6 +67,7 @@ func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {
 		ContentType:  "application/pdf",
 		UploaderIP:   "203.0.113.7",
 		SubmissionID: submissionID,
+		ObjectSHA512: "hash-two",
 	}); err != nil {
 		t.Fatalf("CreateUpload failed: %v", err)
 	}
@@ -94,6 +96,9 @@ func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {
 		}
 		if file.SubmissionUploadedAt == nil {
 			t.Fatalf("file %q missing submission upload time", file.OriginalName)
+		}
+		if file.ObjectHashAlgorithm != "SHA-512" || file.ObjectSHA512 == "" {
+			t.Fatalf("file %q missing stored object hash: algorithm=%q hash=%q", file.OriginalName, file.ObjectHashAlgorithm, file.ObjectSHA512)
 		}
 	}
 	if !files[0].UploadedAt.After(time.Time{}) {

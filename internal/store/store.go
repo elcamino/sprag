@@ -131,6 +131,8 @@ type Upload struct {
 	EncryptionMode       string     `json:"encryption_mode,omitempty"`
 	EncryptionAlgorithm  string     `json:"encryption_algorithm,omitempty"`
 	EncryptionEnvelope   string     `json:"encryption_envelope,omitempty"`
+	ObjectSHA512         string     `json:"object_sha512,omitempty"`
+	ObjectHashAlgorithm  string     `json:"object_hash_algorithm,omitempty"`
 	ReceiptToken         string     `json:"receipt_token,omitempty"`
 	ReceiptStatus        string     `json:"receipt_status,omitempty"`
 	ReceiptStatusUpdated *time.Time `json:"receipt_status_updated_at,omitempty"`
@@ -148,6 +150,7 @@ type UploadCreate struct {
 	EncryptionMode      string
 	EncryptionAlgorithm string
 	EncryptionEnvelope  string
+	ObjectSHA512        string
 }
 
 type SubmissionEnvelope struct {
@@ -174,6 +177,27 @@ type Receipt struct {
 	UpdatedAt   time.Time
 	FileCount   int64
 	TotalBytes  int64
+}
+
+type CustodyEvent struct {
+	ID                   int64     `json:"id"`
+	PageID               int64     `json:"page_id"`
+	UploadID             *int64    `json:"upload_id,omitempty"`
+	SubmissionID         string    `json:"submission_id,omitempty"`
+	SubmissionEnvelopeID *int64    `json:"-"`
+	EventType            string    `json:"event_type"`
+	Actor                string    `json:"actor"`
+	Detail               string    `json:"detail,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+type CustodyEventCreate struct {
+	PageID               int64
+	UploadID             *int64
+	SubmissionEnvelopeID *int64
+	EventType            string
+	Actor                string
+	Detail               string
 }
 
 func ValidReceiptStatus(status string) bool {
@@ -267,10 +291,23 @@ CREATE TABLE IF NOT EXISTS uploads (
   encryption_mode TEXT,
   encryption_algorithm TEXT,
   encryption_envelope TEXT,
+  object_sha512 TEXT,
+  object_hash_algorithm TEXT,
   uploaded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS custody_events (
+  id INTEGER PRIMARY KEY,
+  page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+  submission_envelope_id INTEGER REFERENCES submission_envelopes(id) ON DELETE SET NULL,
+  upload_id INTEGER REFERENCES uploads(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  detail TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_submission_envelopes_page ON submission_envelopes(page_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_custody_events_page ON custody_events(page_id, created_at, id);
 `)
 	if err != nil {
 		return err
@@ -288,6 +325,8 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		{"uploads", "encryption_mode", "TEXT"},
 		{"uploads", "encryption_algorithm", "TEXT"},
 		{"uploads", "encryption_envelope", "TEXT"},
+		{"uploads", "object_sha512", "TEXT"},
+		{"uploads", "object_hash_algorithm", "TEXT"},
 		{"submission_envelopes", "receipt_token", "TEXT"},
 		{"submission_envelopes", "receipt_status", "TEXT NOT NULL DEFAULT 'received'"},
 		{"submission_envelopes", "receipt_status_updated_at", "TEXT"},
@@ -306,6 +345,9 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_submission_envelopes_receipt_token ON submission_envelopes(receipt_token) WHERE receipt_token IS NOT NULL`); err != nil {
+		return err
+	}
+	if err := s.backfillCustodyEvents(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -519,15 +561,25 @@ func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, err
 	}
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO uploads (page_id, submission_envelope_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
-                     encryption_mode, encryption_algorithm, encryption_envelope)
-VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+                     encryption_mode, encryption_algorithm, encryption_envelope, object_sha512, object_hash_algorithm)
+VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
 		in.PageID, envelope.ID, in.S3Key, in.OriginalName, in.SizeBytes, in.ContentType, in.UploaderIP,
-		in.EncryptionMode, in.EncryptionAlgorithm, in.EncryptionEnvelope)
+		in.EncryptionMode, in.EncryptionAlgorithm, in.EncryptionEnvelope, strings.TrimSpace(in.ObjectSHA512), hashAlgorithmFor(in.ObjectSHA512))
 	if err != nil {
 		return Upload{}, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		return Upload{}, err
+	}
+	if _, err := s.RecordCustodyEvent(ctx, CustodyEventCreate{
+		PageID:               in.PageID,
+		UploadID:             &id,
+		SubmissionEnvelopeID: &envelope.ID,
+		EventType:            "upload.accepted",
+		Actor:                "uploader",
+		Detail:               "{}",
+	}); err != nil {
 		return Upload{}, err
 	}
 	return s.GetUpload(ctx, in.PageID, id)
@@ -538,6 +590,7 @@ func (s *SQLite) ListUploads(ctx context.Context, pageID int64) ([]Upload, error
 SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
        coalesce(se.public_id, ''), se.created_at,
        coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       coalesce(u.object_sha512, ''), coalesce(u.object_hash_algorithm, ''),
        coalesce(se.receipt_token, ''), coalesce(se.receipt_status, ''), se.receipt_status_updated_at,
        u.uploaded_at
 FROM uploads u
@@ -564,6 +617,7 @@ func (s *SQLite) GetUpload(ctx context.Context, pageID, uploadID int64) (Upload,
 SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
        coalesce(se.public_id, ''), se.created_at,
        coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       coalesce(u.object_sha512, ''), coalesce(u.object_hash_algorithm, ''),
        coalesce(se.receipt_token, ''), coalesce(se.receipt_status, ''), se.receipt_status_updated_at,
        u.uploaded_at
 FROM uploads u
@@ -635,6 +689,70 @@ WHERE page_id = ? AND public_id = ?`, status, pageID, submissionID)
 		return SubmissionEnvelope{}, ErrNotFound
 	}
 	return s.GetSubmissionEnvelope(ctx, pageID, submissionID)
+}
+
+func (s *SQLite) RecordCustodyEvent(ctx context.Context, in CustodyEventCreate) (CustodyEvent, error) {
+	eventType := strings.TrimSpace(in.EventType)
+	actor := strings.TrimSpace(in.Actor)
+	if in.PageID == 0 {
+		return CustodyEvent{}, fmt.Errorf("page id is required")
+	}
+	if eventType == "" {
+		return CustodyEvent{}, fmt.Errorf("event type is required")
+	}
+	if actor == "" {
+		return CustodyEvent{}, fmt.Errorf("actor is required")
+	}
+	detail := strings.TrimSpace(in.Detail)
+	if detail == "" {
+		detail = "{}"
+	}
+	res, err := s.db.ExecContext(ctx, `
+INSERT INTO custody_events (page_id, submission_envelope_id, upload_id, event_type, actor, detail)
+VALUES (?, ?, ?, ?, ?, nullif(?, ''))`,
+		in.PageID, nullableInt(in.SubmissionEnvelopeID), nullableInt(in.UploadID), eventType, actor, detail)
+	if err != nil {
+		return CustodyEvent{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return CustodyEvent{}, err
+	}
+	return s.GetCustodyEvent(ctx, id)
+}
+
+func (s *SQLite) GetCustodyEvent(ctx context.Context, id int64) (CustodyEvent, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT ce.id, ce.page_id, ce.upload_id, ce.submission_envelope_id, coalesce(se.public_id, ''),
+       ce.event_type, ce.actor, coalesce(ce.detail, ''), ce.created_at
+FROM custody_events ce
+LEFT JOIN submission_envelopes se ON se.id = ce.submission_envelope_id
+WHERE ce.id = ?`, id)
+	return scanCustodyEvent(row)
+}
+
+func (s *SQLite) ListCustodyEvents(ctx context.Context, pageID int64) ([]CustodyEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT ce.id, ce.page_id, ce.upload_id, ce.submission_envelope_id, coalesce(se.public_id, ''),
+       ce.event_type, ce.actor, coalesce(ce.detail, ''), ce.created_at
+FROM custody_events ce
+LEFT JOIN submission_envelopes se ON se.id = ce.submission_envelope_id
+WHERE ce.page_id = ?
+ORDER BY ce.created_at ASC, ce.id ASC`, pageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]CustodyEvent, 0)
+	for rows.Next() {
+		event, err := scanCustodyEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (s *SQLite) RewriteUploaderIPs(ctx context.Context, rewrite func(string) string) error {
@@ -773,6 +891,7 @@ func scanUpload(row scanner) (Upload, error) {
 	err := row.Scan(&upload.ID, &upload.PageID, &upload.S3Key, &upload.OriginalName, &upload.SizeBytes, &upload.ContentType, &upload.UploaderIP,
 		&upload.SubmissionID, &submissionCreated,
 		&upload.EncryptionMode, &upload.EncryptionAlgorithm, &upload.EncryptionEnvelope,
+		&upload.ObjectSHA512, &upload.ObjectHashAlgorithm,
 		&upload.ReceiptToken, &upload.ReceiptStatus, &receiptUpdated,
 		&uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -801,6 +920,32 @@ func scanUpload(row scanner) (Upload, error) {
 	}
 	upload.UploadedAt = parsed
 	return upload, nil
+}
+
+func scanCustodyEvent(row scanner) (CustodyEvent, error) {
+	var event CustodyEvent
+	var uploadID sql.NullInt64
+	var envelopeID sql.NullInt64
+	var created string
+	err := row.Scan(&event.ID, &event.PageID, &uploadID, &envelopeID, &event.SubmissionID, &event.EventType, &event.Actor, &event.Detail, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CustodyEvent{}, ErrNotFound
+	}
+	if err != nil {
+		return CustodyEvent{}, err
+	}
+	if uploadID.Valid {
+		event.UploadID = &uploadID.Int64
+	}
+	if envelopeID.Valid {
+		event.SubmissionEnvelopeID = &envelopeID.Int64
+	}
+	parsed, err := parseDBTime(created)
+	if err != nil {
+		return CustodyEvent{}, err
+	}
+	event.CreatedAt = parsed
+	return event, nil
 }
 
 func (s *SQLite) backfillSubmissionEnvelopes(ctx context.Context) error {
@@ -866,6 +1011,20 @@ ORDER BY id`)
 	return nil
 }
 
+func (s *SQLite) backfillCustodyEvents(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO custody_events (page_id, submission_envelope_id, upload_id, event_type, actor, detail, created_at)
+SELECT u.page_id, u.submission_envelope_id, u.id, 'upload.accepted', 'uploader', '{}', u.uploaded_at
+FROM uploads u
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM custody_events ce
+  WHERE ce.upload_id = u.id AND ce.event_type = 'upload.accepted'
+);
+`)
+	return err
+}
+
 func (s *SQLite) assignReceiptToken(ctx context.Context, envelopeID int64) error {
 	for i := 0; i < 8; i++ {
 		token, err := ids.GenerateSlug(32)
@@ -889,6 +1048,13 @@ WHERE id = ? AND (receipt_token IS NULL OR receipt_token = '')`, token, envelope
 		return nil
 	}
 	return fmt.Errorf("could not generate unique receipt token")
+}
+
+func hashAlgorithmFor(hash string) string {
+	if strings.TrimSpace(hash) == "" {
+		return ""
+	}
+	return "SHA-512"
 }
 
 func parseDBTime(raw string) (time.Time, error) {
