@@ -124,6 +124,7 @@ body {
   .share-block,
   input,
   textarea,
+  select,
   .primary-action,
   .secondary-action,
   .icon-button,
@@ -153,7 +154,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -228,7 +230,8 @@ label {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   border: 1px solid var(--border);
   background: var(--bg-inset);
@@ -244,7 +247,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus);
 }
@@ -623,6 +627,29 @@ textarea:focus {
   text-align: right;
 }
 
+.submission-meta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: end;
+  gap: 8px;
+}
+
+.receipt-status-field {
+  width: 148px;
+  gap: 4px;
+}
+
+.receipt-status-field span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.receipt-status-field select {
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
 .submission-files {
   display: grid;
   gap: 8px;
@@ -702,6 +729,35 @@ textarea:focus {
   gap: 8px;
 }
 
+.receipt-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.receipt-strip > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--success);
+}
+
+.receipt-strip a {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
 .upload-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -755,6 +811,57 @@ textarea:focus {
   height: 100%;
   background: var(--accent);
   transition: width 160ms ease;
+}
+
+.receipt-panel {
+  width: min(620px, 100%);
+  padding: clamp(20px, 4vw, 38px);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+
+.receipt-status-mark.received,
+.receipt-status-mark.reviewed,
+.receipt-status-mark.downloaded {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.receipt-status-mark.rejected {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.receipt-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.receipt-facts > div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+}
+
+.receipt-facts svg {
+  color: var(--accent);
+}
+
+.receipt-facts strong,
+.receipt-facts small {
+  display: block;
+}
+
+.receipt-facts small {
+  color: var(--text-muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -900,8 +1007,16 @@ textarea:focus {
     text-align: left;
   }
   .field-row,
-  .share-block {
+  .share-block,
+  .receipt-facts,
+  .receipt-strip {
     grid-template-columns: 1fr;
+  }
+  .submission-meta-actions {
+    justify-content: flex-start;
+  }
+  .receipt-status-field {
+    width: min(220px, 100%);
   }
   .upload-heading {
     flex-direction: column;

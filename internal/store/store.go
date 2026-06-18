@@ -34,11 +34,21 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrDuplicateSlug is returned by CreatePage when the slug already exists.
 	ErrDuplicateSlug = errors.New("duplicate slug")
+	// ErrInvalidReceiptStatus is returned when a receipt status would turn the
+	// status-only receipt into something outside the supported workflow.
+	ErrInvalidReceiptStatus = errors.New("invalid receipt status")
 )
 
 // sqliteConstraintUnique is SQLITE_CONSTRAINT_UNIQUE, the extended result code
 // for a UNIQUE constraint violation.
 const sqliteConstraintUnique = 2067
+
+const (
+	ReceiptStatusReceived   = "received"
+	ReceiptStatusReviewed   = "reviewed"
+	ReceiptStatusRejected   = "rejected"
+	ReceiptStatusDownloaded = "downloaded"
+)
 
 func isUniqueViolation(err error) bool {
 	var se *sqlite.Error
@@ -121,6 +131,9 @@ type Upload struct {
 	EncryptionMode       string     `json:"encryption_mode,omitempty"`
 	EncryptionAlgorithm  string     `json:"encryption_algorithm,omitempty"`
 	EncryptionEnvelope   string     `json:"encryption_envelope,omitempty"`
+	ReceiptToken         string     `json:"receipt_token,omitempty"`
+	ReceiptStatus        string     `json:"receipt_status,omitempty"`
+	ReceiptStatusUpdated *time.Time `json:"receipt_status_updated_at,omitempty"`
 	UploadedAt           time.Time  `json:"uploaded_at"`
 }
 
@@ -138,17 +151,38 @@ type UploadCreate struct {
 }
 
 type SubmissionEnvelope struct {
-	ID         int64
-	PageID     int64
-	PublicID   string
-	UploaderIP string
-	CreatedAt  time.Time
+	ID                   int64
+	PageID               int64
+	PublicID             string
+	UploaderIP           string
+	ReceiptToken         string
+	ReceiptStatus        string
+	ReceiptStatusUpdated *time.Time
+	CreatedAt            time.Time
 }
 
 type SubmissionEnvelopeCreate struct {
 	PageID     int64
 	PublicID   string
 	UploaderIP string
+}
+
+type Receipt struct {
+	Token       string
+	Status      string
+	SubmittedAt time.Time
+	UpdatedAt   time.Time
+	FileCount   int64
+	TotalBytes  int64
+}
+
+func ValidReceiptStatus(status string) bool {
+	switch status {
+	case ReceiptStatusReceived, ReceiptStatusReviewed, ReceiptStatusRejected, ReceiptStatusDownloaded:
+		return true
+	default:
+		return false
+	}
 }
 
 func Open(ctx context.Context, path string) (*SQLite, error) {
@@ -215,6 +249,9 @@ CREATE TABLE IF NOT EXISTS submission_envelopes (
   page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
   public_id TEXT NOT NULL,
   uploader_ip TEXT,
+  receipt_token TEXT UNIQUE,
+  receipt_status TEXT NOT NULL DEFAULT 'received',
+  receipt_status_updated_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   UNIQUE(page_id, public_id)
 );
@@ -251,6 +288,9 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		{"uploads", "encryption_mode", "TEXT"},
 		{"uploads", "encryption_algorithm", "TEXT"},
 		{"uploads", "encryption_envelope", "TEXT"},
+		{"submission_envelopes", "receipt_token", "TEXT"},
+		{"submission_envelopes", "receipt_status", "TEXT NOT NULL DEFAULT 'received'"},
+		{"submission_envelopes", "receipt_status_updated_at", "TEXT"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.def); err != nil {
 			return err
@@ -260,6 +300,12 @@ CREATE INDEX IF NOT EXISTS idx_uploads_page ON uploads(page_id, uploaded_at DESC
 		return err
 	}
 	if err := s.backfillSubmissionEnvelopes(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillReceiptState(ctx); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_submission_envelopes_receipt_token ON submission_envelopes(receipt_token) WHERE receipt_token IS NOT NULL`); err != nil {
 		return err
 	}
 	return nil
@@ -418,18 +464,37 @@ func (s *SQLite) EnsureSubmissionEnvelope(ctx context.Context, in SubmissionEnve
 	if in.PublicID == "" {
 		return SubmissionEnvelope{}, fmt.Errorf("submission id is required")
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO submission_envelopes (page_id, public_id, uploader_ip)
-VALUES (?, ?, nullif(?, ''))`, in.PageID, in.PublicID, in.UploaderIP)
-	if err != nil {
-		return SubmissionEnvelope{}, err
+	for i := 0; i < 8; i++ {
+		token, err := ids.GenerateSlug(32)
+		if err != nil {
+			return SubmissionEnvelope{}, err
+		}
+		_, err = s.db.ExecContext(ctx, `
+INSERT INTO submission_envelopes (page_id, public_id, uploader_ip, receipt_token, receipt_status, receipt_status_updated_at)
+VALUES (?, ?, nullif(?, ''), ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+ON CONFLICT(page_id, public_id) DO NOTHING`,
+			in.PageID, in.PublicID, in.UploaderIP, token, ReceiptStatusReceived)
+		if isUniqueViolation(err) {
+			continue
+		}
+		if err != nil {
+			return SubmissionEnvelope{}, err
+		}
+		envelope, err := s.GetSubmissionEnvelope(ctx, in.PageID, in.PublicID)
+		if err == nil {
+			return envelope, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return SubmissionEnvelope{}, err
+		}
 	}
-	return s.GetSubmissionEnvelope(ctx, in.PageID, in.PublicID)
+	return SubmissionEnvelope{}, fmt.Errorf("could not generate unique receipt token")
 }
 
 func (s *SQLite) GetSubmissionEnvelope(ctx context.Context, pageID int64, publicID string) (SubmissionEnvelope, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, page_id, public_id, coalesce(uploader_ip, ''), created_at
+SELECT id, page_id, public_id, coalesce(uploader_ip, ''), coalesce(receipt_token, ''),
+       coalesce(receipt_status, ''), receipt_status_updated_at, created_at
 FROM submission_envelopes
 WHERE page_id = ? AND public_id = ?`, pageID, publicID)
 	return scanSubmissionEnvelope(row)
@@ -473,6 +538,7 @@ func (s *SQLite) ListUploads(ctx context.Context, pageID int64) ([]Upload, error
 SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
        coalesce(se.public_id, ''), se.created_at,
        coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       coalesce(se.receipt_token, ''), coalesce(se.receipt_status, ''), se.receipt_status_updated_at,
        u.uploaded_at
 FROM uploads u
 LEFT JOIN submission_envelopes se ON se.id = u.submission_envelope_id
@@ -498,6 +564,7 @@ func (s *SQLite) GetUpload(ctx context.Context, pageID, uploadID int64) (Upload,
 SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
        coalesce(se.public_id, ''), se.created_at,
        coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
+       coalesce(se.receipt_token, ''), coalesce(se.receipt_status, ''), se.receipt_status_updated_at,
        u.uploaded_at
 FROM uploads u
 LEFT JOIN submission_envelopes se ON se.id = u.submission_envelope_id
@@ -515,6 +582,59 @@ func (s *SQLite) DeleteUpload(ctx context.Context, pageID, uploadID int64) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *SQLite) GetReceipt(ctx context.Context, token string) (Receipt, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return Receipt{}, ErrNotFound
+	}
+	row := s.db.QueryRowContext(ctx, `
+SELECT se.receipt_token, coalesce(se.receipt_status, ?), se.created_at,
+       coalesce(se.receipt_status_updated_at, se.created_at),
+       count(u.id), coalesce(sum(u.size_bytes), 0)
+FROM submission_envelopes se
+LEFT JOIN uploads u ON u.submission_envelope_id = se.id
+WHERE se.receipt_token = ?
+GROUP BY se.id`, ReceiptStatusReceived, token)
+	var receipt Receipt
+	var submitted string
+	var updated string
+	err := row.Scan(&receipt.Token, &receipt.Status, &submitted, &updated, &receipt.FileCount, &receipt.TotalBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Receipt{}, ErrNotFound
+	}
+	if err != nil {
+		return Receipt{}, err
+	}
+	receipt.SubmittedAt, err = parseDBTime(submitted)
+	if err != nil {
+		return Receipt{}, err
+	}
+	receipt.UpdatedAt, err = parseDBTime(updated)
+	if err != nil {
+		return Receipt{}, err
+	}
+	return receipt, nil
+}
+
+func (s *SQLite) UpdateReceiptStatus(ctx context.Context, pageID int64, submissionID, status string) (SubmissionEnvelope, error) {
+	status = strings.TrimSpace(status)
+	if !ValidReceiptStatus(status) {
+		return SubmissionEnvelope{}, ErrInvalidReceiptStatus
+	}
+	res, err := s.db.ExecContext(ctx, `
+UPDATE submission_envelopes
+SET receipt_status = ?, receipt_status_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+WHERE page_id = ? AND public_id = ?`, status, pageID, submissionID)
+	if err != nil {
+		return SubmissionEnvelope{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return SubmissionEnvelope{}, ErrNotFound
+	}
+	return s.GetSubmissionEnvelope(ctx, pageID, submissionID)
 }
 
 type scanner interface {
@@ -560,7 +680,9 @@ func scanPage(row scanner) (Page, error) {
 func scanSubmissionEnvelope(row scanner) (SubmissionEnvelope, error) {
 	var envelope SubmissionEnvelope
 	var created string
-	err := row.Scan(&envelope.ID, &envelope.PageID, &envelope.PublicID, &envelope.UploaderIP, &created)
+	var receiptUpdated sql.NullString
+	err := row.Scan(&envelope.ID, &envelope.PageID, &envelope.PublicID, &envelope.UploaderIP,
+		&envelope.ReceiptToken, &envelope.ReceiptStatus, &receiptUpdated, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SubmissionEnvelope{}, ErrNotFound
 	}
@@ -571,6 +693,13 @@ func scanSubmissionEnvelope(row scanner) (SubmissionEnvelope, error) {
 	if err != nil {
 		return SubmissionEnvelope{}, err
 	}
+	if receiptUpdated.Valid && receiptUpdated.String != "" {
+		updated, err := parseDBTime(receiptUpdated.String)
+		if err != nil {
+			return SubmissionEnvelope{}, err
+		}
+		envelope.ReceiptStatusUpdated = &updated
+	}
 	envelope.CreatedAt = parsed
 	return envelope, nil
 }
@@ -578,10 +707,13 @@ func scanSubmissionEnvelope(row scanner) (SubmissionEnvelope, error) {
 func scanUpload(row scanner) (Upload, error) {
 	var upload Upload
 	var submissionCreated sql.NullString
+	var receiptUpdated sql.NullString
 	var uploaded string
 	err := row.Scan(&upload.ID, &upload.PageID, &upload.S3Key, &upload.OriginalName, &upload.SizeBytes, &upload.ContentType, &upload.UploaderIP,
 		&upload.SubmissionID, &submissionCreated,
-		&upload.EncryptionMode, &upload.EncryptionAlgorithm, &upload.EncryptionEnvelope, &uploaded)
+		&upload.EncryptionMode, &upload.EncryptionAlgorithm, &upload.EncryptionEnvelope,
+		&upload.ReceiptToken, &upload.ReceiptStatus, &receiptUpdated,
+		&uploaded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Upload{}, ErrNotFound
 	}
@@ -598,6 +730,13 @@ func scanUpload(row scanner) (Upload, error) {
 			return Upload{}, err
 		}
 		upload.SubmissionUploadedAt = &created
+	}
+	if receiptUpdated.Valid && receiptUpdated.String != "" {
+		updated, err := parseDBTime(receiptUpdated.String)
+		if err != nil {
+			return Upload{}, err
+		}
+		upload.ReceiptStatusUpdated = &updated
 	}
 	upload.UploadedAt = parsed
 	return upload, nil
@@ -623,6 +762,72 @@ SET submission_envelope_id = (
 WHERE submission_envelope_id IS NULL;
 `)
 	return err
+}
+
+func (s *SQLite) backfillReceiptState(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE submission_envelopes
+SET receipt_status = ?
+WHERE receipt_status IS NULL OR receipt_status = '';
+UPDATE submission_envelopes
+SET receipt_status_updated_at = created_at
+WHERE receipt_status_updated_at IS NULL OR receipt_status_updated_at = '';
+`, ReceiptStatusReceived); err != nil {
+		return err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id
+FROM submission_envelopes
+WHERE receipt_token IS NULL OR receipt_token = ''
+ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var idsToBackfill []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		idsToBackfill = append(idsToBackfill, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range idsToBackfill {
+		if err := s.assignReceiptToken(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLite) assignReceiptToken(ctx context.Context, envelopeID int64) error {
+	for i := 0; i < 8; i++ {
+		token, err := ids.GenerateSlug(32)
+		if err != nil {
+			return err
+		}
+		res, err := s.db.ExecContext(ctx, `
+UPDATE submission_envelopes
+SET receipt_token = ?
+WHERE id = ? AND (receipt_token IS NULL OR receipt_token = '')`, token, envelopeID)
+		if isUniqueViolation(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			return nil
+		}
+		return nil
+	}
+	return fmt.Errorf("could not generate unique receipt token")
 }
 
 func parseDBTime(raw string) (time.Time, error) {

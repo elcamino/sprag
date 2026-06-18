@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-import { PageSummary, UploadFile } from "./api";
+import { PageSummary, ReceiptStatus, UploadFile } from "./api";
 
 export type LoadedFiles = {
   pageID: number;
@@ -31,6 +31,9 @@ export type DownloadUnlockPrompt = {
 export type SubmissionFileGroup = {
   submissionID: string;
   uploadedAt: string;
+  receiptToken?: string;
+  receiptStatus?: ReceiptStatus;
+  receiptStatusUpdatedAt?: string;
   files: UploadFile[];
   fileCount: number;
   totalBytes: number;
@@ -60,6 +63,9 @@ export function groupFilesBySubmission(files: UploadFile[]): SubmissionFileGroup
       group = {
         submissionID,
         uploadedAt: file.submission_uploaded_at || file.uploaded_at,
+        receiptToken: file.receipt_token,
+        receiptStatus: file.receipt_status,
+        receiptStatusUpdatedAt: file.receipt_status_updated_at,
         files: [],
         fileCount: 0,
         totalBytes: 0

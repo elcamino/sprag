@@ -163,6 +163,130 @@ func TestUploadsCanShareSubmissionEnvelope(t *testing.T) {
 	}
 }
 
+func TestUploadReturnsStatusOnlyReceipt(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Receipt intake"})
+
+	submissionID := "55555555-5555-4555-8555-555555555555"
+	first := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"submission_id": submissionID,
+	}, "file", "one.pdf", []byte("first body"), nil)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first upload status = %d body=%s", first.Code, first.Body.String())
+	}
+	var firstCreated struct {
+		SubmissionID  string `json:"submission_id"`
+		ReceiptURL    string `json:"receipt_url"`
+		ReceiptStatus string `json:"receipt_status"`
+	}
+	decodeJSON(t, first.Body.Bytes(), &firstCreated)
+	if firstCreated.SubmissionID != submissionID {
+		t.Fatalf("submission_id = %q, want %q", firstCreated.SubmissionID, submissionID)
+	}
+	if firstCreated.ReceiptStatus != "received" {
+		t.Fatalf("receipt_status = %q, want received", firstCreated.ReceiptStatus)
+	}
+	if !strings.HasPrefix(firstCreated.ReceiptURL, "https://sprag.example.test/r/") {
+		t.Fatalf("receipt_url = %q, want public /r URL", firstCreated.ReceiptURL)
+	}
+	token := firstCreated.ReceiptURL[strings.LastIndex(firstCreated.ReceiptURL, "/")+1:]
+
+	second := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"submission_id": submissionID,
+	}, "file", "two.pdf", []byte("second body"), nil)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second upload status = %d body=%s", second.Code, second.Body.String())
+	}
+	var secondCreated struct {
+		ReceiptURL string `json:"receipt_url"`
+	}
+	decodeJSON(t, second.Body.Bytes(), &secondCreated)
+	if secondCreated.ReceiptURL != firstCreated.ReceiptURL {
+		t.Fatalf("receipt_url changed within one submission: %q vs %q", secondCreated.ReceiptURL, firstCreated.ReceiptURL)
+	}
+
+	receipt := perform(t, handler, http.MethodGet, "/api/r/"+token, nil, nil, nil)
+	if receipt.Code != http.StatusOK {
+		t.Fatalf("receipt status = %d body=%s", receipt.Code, receipt.Body.String())
+	}
+	var publicReceipt struct {
+		Status      string `json:"status"`
+		SubmittedAt string `json:"submitted_at"`
+		UpdatedAt   string `json:"updated_at"`
+		FileCount   int64  `json:"file_count"`
+		TotalSize   int64  `json:"total_size"`
+	}
+	decodeJSON(t, receipt.Body.Bytes(), &publicReceipt)
+	if publicReceipt.Status != "received" || publicReceipt.FileCount != 2 || publicReceipt.TotalSize != 21 {
+		t.Fatalf("receipt body = %#v, want received/2 files/21 bytes", publicReceipt)
+	}
+	body := receipt.Body.String()
+	for _, forbidden := range []string{"one.pdf", "two.pdf", "Receipt intake", slug, submissionID, "uploader_ip"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("public receipt leaked %q in %s", forbidden, body)
+		}
+	}
+
+	missing := perform(t, handler, http.MethodGet, "/api/r/not-a-real-receipt-token", nil, nil, nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing receipt status = %d body=%s, want 404", missing.Code, missing.Body.String())
+	}
+}
+
+func TestAdminCanUpdateReceiptStatusOnly(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Receipt status"})
+
+	submissionID := "66666666-6666-4666-8666-666666666666"
+	upload := performMultipartFields(t, handler, "/api/u/"+slug, map[string]string{
+		"submission_id": submissionID,
+	}, "file", "evidence.pdf", []byte("body"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+	var created struct {
+		ReceiptURL string `json:"receipt_url"`
+	}
+	decodeJSON(t, upload.Body.Bytes(), &created)
+	token := created.ReceiptURL[strings.LastIndex(created.ReceiptURL, "/")+1:]
+
+	update := performJSON(t, handler, http.MethodPatch, "/api/admin/pages/1/submissions/"+submissionID+"/receipt", map[string]string{
+		"status": "reviewed",
+	}, session, csrfHeader())
+	if update.Code != http.StatusOK {
+		t.Fatalf("status update = %d body=%s", update.Code, update.Body.String())
+	}
+	var updated struct {
+		SubmissionID  string `json:"submission_id"`
+		ReceiptURL    string `json:"receipt_url"`
+		ReceiptStatus string `json:"receipt_status"`
+	}
+	decodeJSON(t, update.Body.Bytes(), &updated)
+	if updated.SubmissionID != submissionID || updated.ReceiptURL != created.ReceiptURL || updated.ReceiptStatus != "reviewed" {
+		t.Fatalf("unexpected status update body: %#v", updated)
+	}
+
+	receipt := perform(t, handler, http.MethodGet, "/api/r/"+token, nil, nil, nil)
+	if receipt.Code != http.StatusOK {
+		t.Fatalf("receipt status = %d body=%s", receipt.Code, receipt.Body.String())
+	}
+	if !strings.Contains(receipt.Body.String(), `"status":"reviewed"`) {
+		t.Fatalf("receipt did not show reviewed status: %s", receipt.Body.String())
+	}
+
+	badStatus := performJSON(t, handler, http.MethodPatch, "/api/admin/pages/1/submissions/"+submissionID+"/receipt", map[string]string{
+		"status": "message-sent",
+	}, session, csrfHeader())
+	if badStatus.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status update = %d body=%s, want 400", badStatus.Code, badStatus.Body.String())
+	}
+	if !strings.Contains(badStatus.Body.String(), "invalid_receipt_status") {
+		t.Fatalf("expected invalid_receipt_status error, got %s", badStatus.Body.String())
+	}
+}
+
 func TestUploadRejectsDisallowedExtensionWithoutWritingBlob(t *testing.T) {
 	handler, blobs := newTestHandler(t)
 	session := performJSON(t, handler, http.MethodPost, "/api/admin/login", map[string]string{

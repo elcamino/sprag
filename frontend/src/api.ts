@@ -51,7 +51,30 @@ export type UploadFile = {
   encryption_mode?: string;
   encryption_algorithm?: string;
   encryption_envelope?: string;
+  receipt_token?: string;
+  receipt_status?: ReceiptStatus;
+  receipt_status_updated_at?: string;
   uploaded_at: string;
+};
+
+export type ReceiptStatus = "received" | "reviewed" | "rejected" | "downloaded";
+
+export type CreatedUpload = {
+  id: number;
+  name: string;
+  size: number;
+  submission_id: string;
+  encryption_mode?: string;
+  receipt_url: string;
+  receipt_status: ReceiptStatus;
+};
+
+export type PublicReceipt = {
+  status: ReceiptStatus;
+  submitted_at: string;
+  updated_at: string;
+  file_count: number;
+  total_size: number;
 };
 
 export type PublicPageE2E = {

@@ -15,8 +15,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, FileKey2, FileUp, KeyRound, XCircle } from "lucide-react";
-import { api, formatBytes, PublicPage } from "../api";
+import { CheckCircle2, Copy, FileKey2, FileUp, KeyRound, XCircle } from "lucide-react";
+import { api, CreatedUpload, formatBytes, PublicPage } from "../api";
 import { encryptFileForPage } from "../e2eCrypto";
 import { createTransferEstimator, formatDuration } from "../transfer";
 
@@ -32,12 +32,19 @@ type UploadState = {
   message?: string;
 };
 
+type SubmissionReceipt = {
+  submissionID: string;
+  url: string;
+  copied: boolean;
+};
+
 export default function Upload() {
   const slug = useMemo(() => window.location.pathname.split("/").filter(Boolean)[1] ?? "", []);
   const [page, setPage] = useState<PublicPage | null>(null);
   const [pin, setPin] = useState("");
   const [pinUnlocked, setPinUnlocked] = useState(false);
   const [uploads, setUploads] = useState<UploadState[]>([]);
+  const [receipts, setReceipts] = useState<SubmissionReceipt[]>([]);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -145,6 +152,10 @@ export default function Upload() {
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
+          const created = parseCreatedUpload(xhr);
+          if (created?.receipt_url) {
+            setReceipts((current) => upsertReceipt(current, created.submission_id, created.receipt_url));
+          }
           setUploads((current) =>
             current.map((item) =>
               item.id === id ? { ...item, status: "done", progress: 100, loaded: item.total, etaSeconds: null } : item
@@ -164,6 +175,14 @@ export default function Upload() {
       setUploads((current) => current.map((item) => (item.id === id ? { ...item, status: "uploading", message: undefined } : item)));
       xhr.send(form);
     });
+  }
+
+  async function copyReceipt(receipt: SubmissionReceipt) {
+    await navigator.clipboard.writeText(receipt.url);
+    setReceipts((current) => current.map((item) => (item.submissionID === receipt.submissionID ? { ...item, copied: true } : item)));
+    window.setTimeout(() => {
+      setReceipts((current) => current.map((item) => (item.submissionID === receipt.submissionID ? { ...item, copied: false } : item)));
+    }, 1400);
   }
 
   if (error && !page) {
@@ -225,6 +244,23 @@ export default function Upload() {
               </small>
               <input ref={inputRef} type="file" multiple onChange={chooseFiles} />
             </div>
+            {receipts.length > 0 && (
+              <div className="receipt-list" aria-live="polite">
+                {receipts.map((receipt) => (
+                  <div className="receipt-strip" key={receipt.submissionID}>
+                    <span>
+                      <CheckCircle2 size={18} />
+                      <strong>Receipt ready</strong>
+                    </span>
+                    <a href={receipt.url}>{receipt.url}</a>
+                    <button type="button" className="secondary-action" onClick={() => copyReceipt(receipt)}>
+                      <Copy size={17} />
+                      {receipt.copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="upload-list">
               {uploads.map((upload) => (
                 <div className="upload-row" key={upload.id}>
@@ -258,6 +294,21 @@ export default function Upload() {
       </section>
     </main>
   );
+}
+
+function upsertReceipt(current: SubmissionReceipt[], submissionID: string, url: string): SubmissionReceipt[] {
+  if (current.some((receipt) => receipt.submissionID === submissionID)) {
+    return current.map((receipt) => (receipt.submissionID === submissionID ? { ...receipt, url } : receipt));
+  }
+  return [{ submissionID, url, copied: false }, ...current];
+}
+
+function parseCreatedUpload(xhr: XMLHttpRequest): CreatedUpload | null {
+  try {
+    return JSON.parse(xhr.responseText) as CreatedUpload;
+  } catch {
+    return null;
+  }
 }
 
 function uploadDetail(upload: UploadState): string {

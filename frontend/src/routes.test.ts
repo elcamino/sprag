@@ -26,6 +26,10 @@ describe("routeForPath", () => {
     expect(routeForPath("/u/abc123")).toBe("upload");
   });
 
+  it("routes public receipts to the receipt page", () => {
+    expect(routeForPath("/r/abc123")).toBe("receipt");
+  });
+
   it("routes bare admin to the login page", () => {
     expect(routeForPath("/admin")).toBe("admin-login");
     expect(routeForPath("/admin/")).toBe("admin-login");

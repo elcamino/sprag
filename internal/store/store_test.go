@@ -101,6 +101,114 @@ func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreCreatesReceiptForSubmissionEnvelope(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	page, err := db.CreatePage(ctx, store.PageCreate{
+		Slug:  "receipt-page-1",
+		Title: "Receipt intake",
+	})
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+
+	submissionID := "33333333-3333-4333-8333-333333333333"
+	first, err := db.CreateUpload(ctx, store.UploadCreate{
+		PageID:       page.ID,
+		S3Key:        "pages/receipt/file-1/one.pdf",
+		OriginalName: "one.pdf",
+		SizeBytes:    12,
+		SubmissionID: submissionID,
+	})
+	if err != nil {
+		t.Fatalf("CreateUpload first failed: %v", err)
+	}
+	second, err := db.CreateUpload(ctx, store.UploadCreate{
+		PageID:       page.ID,
+		S3Key:        "pages/receipt/file-2/two.pdf",
+		OriginalName: "two.pdf",
+		SizeBytes:    34,
+		SubmissionID: submissionID,
+	})
+	if err != nil {
+		t.Fatalf("CreateUpload second failed: %v", err)
+	}
+	if first.ReceiptToken == "" {
+		t.Fatal("first upload missing receipt token")
+	}
+	if first.ReceiptToken != second.ReceiptToken {
+		t.Fatalf("uploads in one submission got different receipt tokens: %q vs %q", first.ReceiptToken, second.ReceiptToken)
+	}
+	if first.ReceiptStatus != "received" || second.ReceiptStatus != "received" {
+		t.Fatalf("receipt statuses = %q/%q, want received", first.ReceiptStatus, second.ReceiptStatus)
+	}
+
+	receipt, err := db.GetReceipt(ctx, first.ReceiptToken)
+	if err != nil {
+		t.Fatalf("GetReceipt failed: %v", err)
+	}
+	if receipt.Status != "received" {
+		t.Fatalf("receipt status = %q, want received", receipt.Status)
+	}
+	if receipt.FileCount != 2 || receipt.TotalBytes != 46 {
+		t.Fatalf("receipt aggregate = %d files/%d bytes, want 2 files/46 bytes", receipt.FileCount, receipt.TotalBytes)
+	}
+	if receipt.SubmittedAt.IsZero() || receipt.UpdatedAt.IsZero() {
+		t.Fatalf("receipt times were not populated: submitted=%v updated=%v", receipt.SubmittedAt, receipt.UpdatedAt)
+	}
+}
+
+func TestSQLiteStoreUpdatesReceiptStatus(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	page, err := db.CreatePage(ctx, store.PageCreate{
+		Slug:  "receipt-status-1",
+		Title: "Receipt status",
+	})
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	created, err := db.CreateUpload(ctx, store.UploadCreate{
+		PageID:       page.ID,
+		S3Key:        "pages/receipt/file/report.pdf",
+		OriginalName: "report.pdf",
+		SizeBytes:    12,
+		SubmissionID: "44444444-4444-4444-8444-444444444444",
+	})
+	if err != nil {
+		t.Fatalf("CreateUpload failed: %v", err)
+	}
+
+	updated, err := db.UpdateReceiptStatus(ctx, page.ID, created.SubmissionID, "reviewed")
+	if err != nil {
+		t.Fatalf("UpdateReceiptStatus failed: %v", err)
+	}
+	if updated.ReceiptStatus != "reviewed" {
+		t.Fatalf("updated receipt status = %q, want reviewed", updated.ReceiptStatus)
+	}
+	receipt, err := db.GetReceipt(ctx, created.ReceiptToken)
+	if err != nil {
+		t.Fatalf("GetReceipt failed: %v", err)
+	}
+	if receipt.Status != "reviewed" {
+		t.Fatalf("public receipt status = %q, want reviewed", receipt.Status)
+	}
+
+	if _, err := db.UpdateReceiptStatus(ctx, page.ID, created.SubmissionID, "chatting"); err == nil {
+		t.Fatal("expected invalid receipt status to fail")
+	}
+}
+
 func TestSQLiteStoreRejectsDuplicateSlugs(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
@@ -185,6 +293,16 @@ VALUES (9, 1, 'pages/legacy/file/report.pdf', 'report.pdf', 12, '203.0.113.9', '
 	}
 	if files[0].SubmissionUploadedAt == nil || !files[0].SubmissionUploadedAt.Equal(time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected submission upload time: %v", files[0].SubmissionUploadedAt)
+	}
+	if files[0].ReceiptToken == "" {
+		t.Fatal("legacy upload missing backfilled receipt token")
+	}
+	receipt, err := db.GetReceipt(ctx, files[0].ReceiptToken)
+	if err != nil {
+		t.Fatalf("GetReceipt for backfilled legacy token failed: %v", err)
+	}
+	if receipt.Status != "received" || receipt.FileCount != 1 || receipt.TotalBytes != 12 {
+		t.Fatalf("legacy receipt = %#v, want received/1 file/12 bytes", receipt)
 	}
 }
 

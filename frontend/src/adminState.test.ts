@@ -114,7 +114,10 @@ describe("admin page state", () => {
         size: 2,
         uploaded_at: "2026-06-17T10:00:02Z",
         submission_id: "submission-a",
-        submission_uploaded_at: "2026-06-17T10:00:00Z"
+        submission_uploaded_at: "2026-06-17T10:00:00Z",
+        receipt_token: "receipt-a",
+        receipt_status: "received",
+        receipt_status_updated_at: "2026-06-17T10:00:03Z"
       },
       {
         id: 1,
@@ -123,7 +126,10 @@ describe("admin page state", () => {
         size: 1,
         uploaded_at: "2026-06-17T10:00:01Z",
         submission_id: "submission-a",
-        submission_uploaded_at: "2026-06-17T10:00:00Z"
+        submission_uploaded_at: "2026-06-17T10:00:00Z",
+        receipt_token: "receipt-a",
+        receipt_status: "received",
+        receipt_status_updated_at: "2026-06-17T10:00:03Z"
       },
       {
         id: 3,
@@ -132,7 +138,10 @@ describe("admin page state", () => {
         size: 3,
         uploaded_at: "2026-06-17T09:00:00Z",
         submission_id: "submission-b",
-        submission_uploaded_at: "2026-06-17T09:00:00Z"
+        submission_uploaded_at: "2026-06-17T09:00:00Z",
+        receipt_token: "receipt-b",
+        receipt_status: "reviewed",
+        receipt_status_updated_at: "2026-06-17T09:30:00Z"
       }
     ]);
 
@@ -141,13 +150,18 @@ describe("admin page state", () => {
       submissionID: "submission-a",
       fileCount: 2,
       totalBytes: 3,
-      uploadedAt: "2026-06-17T10:00:00Z"
+      uploadedAt: "2026-06-17T10:00:00Z",
+      receiptToken: "receipt-a",
+      receiptStatus: "received",
+      receiptStatusUpdatedAt: "2026-06-17T10:00:03Z"
     });
     expect(groups[0].files.map((file) => file.name)).toEqual(["two.txt", "one.txt"]);
     expect(groups[1]).toMatchObject({
       submissionID: "submission-b",
       fileCount: 1,
-      totalBytes: 3
+      totalBytes: 3,
+      receiptToken: "receipt-b",
+      receiptStatus: "reviewed"
     });
   });
 });

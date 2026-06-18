@@ -29,9 +29,10 @@ import {
   Trash2,
   UploadCloud
 } from "lucide-react";
-import { api, CreatedPage, E2EConfig, formatBytes, formatDate, PageSummary, UploadFile } from "../api";
+import { api, CreatedPage, E2EConfig, formatBytes, formatDate, PageSummary, ReceiptStatus, UploadFile } from "../api";
 import {
   DownloadUnlockPrompt,
+  SubmissionFileGroup,
   downloadUnlockPromptActive,
   filesVisibleForSelectedPage,
   groupFilesBySubmission,
@@ -71,6 +72,8 @@ const emptyForm: PageForm = {
   expires_at: "",
   e2e_enabled: false
 };
+
+const receiptStatuses: ReceiptStatus[] = ["received", "reviewed", "rejected", "downloaded"];
 
 export default function AdminDashboard() {
   const [pages, setPages] = useState<PageSummary[]>([]);
@@ -235,6 +238,20 @@ export default function AdminDashboard() {
     await api<void>(`/api/admin/pages/${selected.id}/files/${file.id}`, { method: "DELETE" });
     await loadFiles(selected.id);
     await loadPages();
+  }
+
+  async function updateReceiptStatus(group: SubmissionFileGroup, status: ReceiptStatus) {
+    if (!selected) return;
+    setError("");
+    try {
+      await api(`/api/admin/pages/${selected.id}/submissions/${encodeURIComponent(group.submissionID)}/receipt`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      await loadFiles(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update receipt status");
+    }
   }
 
   async function logout() {
@@ -635,7 +652,27 @@ export default function AdminDashboard() {
                           {formatDate(group.uploadedAt)}
                         </small>
                       </span>
-                      <code>{group.submissionID}</code>
+                      <div className="submission-meta-actions">
+                        <code>{group.submissionID}</code>
+                        <label className="receipt-status-field">
+                          <span>Status</span>
+                          <select
+                            value={group.receiptStatus ?? "received"}
+                            onChange={(event) => void updateReceiptStatus(group, event.target.value as ReceiptStatus)}
+                          >
+                            {receiptStatuses.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {group.receiptToken && (
+                          <a className="secondary-action" href={`/r/${group.receiptToken}`}>
+                            Receipt
+                          </a>
+                        )}
+                      </div>
                     </div>
                     <div className="submission-files">
                       {group.files.map((file) => (

@@ -21,6 +21,7 @@ import { routeForPath } from "./routes";
 
 const Home = lazy(() => import("./pages/Home"));
 const Upload = lazy(() => import("./pages/Upload"));
+const Receipt = lazy(() => import("./pages/Receipt"));
 const AdminLogin = lazy(() => import("./pages/AdminLogin"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
 
@@ -33,6 +34,8 @@ export default function App() {
       <AdminLogin />
     ) : routeKind === "admin-dashboard" ? (
       <AdminDashboard />
+    ) : routeKind === "receipt" ? (
+      <Receipt />
     ) : (
       <Upload />
     );

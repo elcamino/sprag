@@ -170,6 +170,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 	r.Get("/api/u/{slug}", s.handlePublicPage)
 	r.Post("/api/u/{slug}/pin", s.handlePIN)
 	r.Post("/api/u/{slug}", s.handleUpload)
+	r.Get("/api/r/{receiptToken}", s.handlePublicReceipt)
 
 	r.Post("/api/admin/login", s.handleLogin)
 	r.Group(func(r chi.Router) {
@@ -185,6 +186,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 		r.Get("/api/admin/pages/{pageID}/files/{fileID}", s.handleDownloadFile)
 		r.With(s.requireCSRF).Delete("/api/admin/pages/{pageID}/files/{fileID}", s.handleDeleteFile)
 		r.Get("/api/admin/pages/{pageID}/zip", s.handleZip)
+		r.With(s.requireCSRF).Patch("/api/admin/pages/{pageID}/submissions/{submissionID}/receipt", s.handleUpdateReceiptStatus)
 	})
 
 	if staticFS != nil {
@@ -466,6 +468,63 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handlePublicReceipt(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(chi.URLParam(r, "receiptToken"))
+	receipt, err := s.store.GetReceipt(r.Context(), token)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "receipt not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       receipt.Status,
+		"submitted_at": receipt.SubmittedAt,
+		"updated_at":   receipt.UpdatedAt,
+		"file_count":   receipt.FileCount,
+		"total_size":   receipt.TotalBytes,
+	})
+}
+
+func (s *Server) handleUpdateReceiptStatus(w http.ResponseWriter, r *http.Request) {
+	pageID, ok := parseIDParam(w, r, "pageID")
+	if !ok {
+		return
+	}
+	submissionID := strings.TrimSpace(chi.URLParam(r, "submissionID"))
+	if submissionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_submission_id", "submission id is invalid")
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	envelope, err := s.store.UpdateReceiptStatus(r.Context(), pageID, submissionID, req.Status)
+	if errors.Is(err, store.ErrInvalidReceiptStatus) {
+		writeError(w, http.StatusBadRequest, "invalid_receipt_status", "receipt status is invalid")
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "submission receipt not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"submission_id":             envelope.PublicID,
+		"receipt_url":               s.receiptURL(envelope.ReceiptToken),
+		"receipt_status":            envelope.ReceiptStatus,
+		"receipt_status_updated_at": envelope.ReceiptStatusUpdated,
+	})
+}
+
 func (s *Server) writeZipEntry(ctx context.Context, zw *zip.Writer, names map[string]bool, upload store.Upload) error {
 	body, err := s.blobs.Download(ctx, upload.S3Key)
 	if err != nil {
@@ -625,6 +684,8 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		"size":            upload.SizeBytes,
 		"submission_id":   upload.SubmissionID,
 		"encryption_mode": upload.EncryptionMode,
+		"receipt_url":     s.receiptURL(upload.ReceiptToken),
+		"receipt_status":  upload.ReceiptStatus,
 	})
 }
 
@@ -783,6 +844,10 @@ func (s *Server) objectKey(slug, uploadID, original string) string {
 
 func (s *Server) shareURL(slug string) string {
 	return strings.TrimRight(s.cfg.BaseURL, "/") + "/u/" + slug
+}
+
+func (s *Server) receiptURL(token string) string {
+	return strings.TrimRight(s.cfg.BaseURL, "/") + "/r/" + token
 }
 
 func (s *Server) serverError(w http.ResponseWriter, err error) {

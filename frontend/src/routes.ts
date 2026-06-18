@@ -14,11 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-export type RouteKind = "home" | "upload" | "admin-login" | "admin-dashboard";
+export type RouteKind = "home" | "upload" | "receipt" | "admin-login" | "admin-dashboard";
 
 export function routeForPath(path: string): RouteKind {
   if (path === "/" || path === "") {
     return "home";
+  }
+  if (path.startsWith("/r/")) {
+    return "receipt";
   }
   if (path === "/admin" || path === "/admin/") {
     return "admin-login";
