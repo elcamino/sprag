@@ -5,6 +5,9 @@
 /frontend/dist/
 /.env
 /.tmp/
+/.superpowers/
+/.playwright-mcp/
+/*.png
 *.db
 .DS_Store
 *.sprag
