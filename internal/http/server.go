@@ -197,6 +197,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 		r.Get("/api/admin/pages", s.handleListPages)
 		r.With(s.requireCSRF).Post("/api/admin/pages", s.handleCreatePage)
 		r.With(s.requireCSRF).Patch("/api/admin/pages/{pageID}", s.handleUpdatePage)
+		r.With(s.requireCSRF).Post("/api/admin/pages/{pageID}/seal", s.handleSealPage)
 		r.With(s.requireCSRF).Delete("/api/admin/pages/{pageID}", s.handleDeletePage)
 		r.Get("/api/admin/pages/{pageID}/files", s.handleListFiles)
 		r.Get("/api/admin/pages/{pageID}/files/{fileID}", s.handleDownloadFile)
@@ -289,6 +290,10 @@ func (s *Server) handleUpdatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := s.store.UpdatePage(r.Context(), pageID, update)
+	if errors.Is(err, store.ErrPageSealed) {
+		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be reopened")
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "page not found")
 		return
@@ -297,12 +302,83 @@ func (s *Server) handleUpdatePage(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	if page.SealedAt != nil {
+		if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+			PageID:    pageID,
+			EventType: "page.updated",
+			Actor:     "admin",
+			Detail:    adminActionDetail(page, map[string]any{"fields": pagePatchFields(req)}),
+		}); err != nil {
+			s.serverError(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) handleSealPage(w http.ResponseWriter, r *http.Request) {
+	pageID, ok := parseIDParam(w, r, "pageID")
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	before, err := s.store.GetPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	page, err := s.store.SealPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if before.SealedAt == nil {
+		detail := map[string]any{"sealed_at": page.SealedAt}
+		if reason := strings.TrimSpace(req.Reason); reason != "" {
+			detail["reason"] = reason
+		}
+		if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+			PageID:    page.ID,
+			EventType: "page.sealed",
+			Actor:     "admin",
+			Detail:    jsonDetail(detail),
+		}); err != nil {
+			s.serverError(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) handleDeletePage(w http.ResponseWriter, r *http.Request) {
 	pageID, ok := parseIDParam(w, r, "pageID")
 	if !ok {
+		return
+	}
+	page, err := s.store.GetPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if page.SealedAt != nil {
+		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be deleted")
 		return
 	}
 	if r.URL.Query().Get("files") == "1" {
@@ -320,6 +396,8 @@ func (s *Server) handleDeletePage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.DeletePage(r.Context(), pageID); errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "page not found")
+	} else if errors.Is(err, store.ErrPageSealed) {
+		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be deleted")
 	} else if err != nil {
 		s.serverError(w, err)
 	} else {
@@ -365,6 +443,11 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	page, err := s.store.GetPage(r.Context(), pageID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
 	body, err := s.blobs.Download(r.Context(), upload.S3Key)
 	if errors.Is(err, blob.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "file object not found")
@@ -394,7 +477,7 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		UploadID:  &upload.ID,
 		EventType: "file.downloaded",
 		Actor:     "admin",
-		Detail:    jsonDetail(map[string]any{"bytes": upload.SizeBytes}),
+		Detail:    adminActionDetail(page, map[string]any{"bytes": upload.SizeBytes}),
 	}); err != nil {
 		s.logger.Error("record custody event failed", "upload_id", upload.ID, "event_type", "file.downloaded", "error", err)
 	}
@@ -418,7 +501,27 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	page, err := s.store.GetPage(r.Context(), pageID)
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
 	if err := s.blobs.Delete(r.Context(), upload.S3Key); err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+		PageID:    pageID,
+		UploadID:  &upload.ID,
+		EventType: "file.deleted",
+		Actor:     "admin",
+		Detail: adminActionDetail(page, map[string]any{
+			"upload_id":  upload.ID,
+			"name":       upload.OriginalName,
+			"object_key": upload.S3Key,
+			"bytes":      upload.SizeBytes,
+		}),
+	}); err != nil {
 		s.serverError(w, err)
 		return
 	}
@@ -492,6 +595,17 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	if err := zw.Close(); err != nil {
 		s.logger.Error("zip finalize failed", "page_id", pageID, "error", err)
 	}
+	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+		PageID:    pageID,
+		EventType: "page.exported",
+		Actor:     "admin",
+		Detail: adminActionDetail(page, map[string]any{
+			"format":     "zip",
+			"file_count": len(uploads),
+		}),
+	}); err != nil {
+		s.logger.Error("record custody event failed", "page_id", pageID, "event_type", "page.exported", "error", err)
+	}
 }
 
 func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +619,15 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		s.serverError(w, err)
+		return
+	}
+	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
+		PageID:    pageID,
+		EventType: "page.exported",
+		Actor:     "admin",
+		Detail:    adminActionDetail(page, map[string]any{"format": "manifest"}),
+	}); err != nil {
 		s.serverError(w, err)
 		return
 	}
@@ -576,12 +699,21 @@ func (s *Server) handleUpdateReceiptStatus(w http.ResponseWriter, r *http.Reques
 		s.serverError(w, err)
 		return
 	}
+	page, err := s.store.GetPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "page not found")
+		return
+	}
+	if err != nil {
+		s.serverError(w, err)
+		return
+	}
 	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
 		PageID:               pageID,
 		SubmissionEnvelopeID: &envelope.ID,
 		EventType:            "receipt.status_updated",
 		Actor:                "admin",
-		Detail:               jsonDetail(map[string]any{"status": envelope.ReceiptStatus}),
+		Detail:               adminActionDetail(page, map[string]any{"status": envelope.ReceiptStatus}),
 	}); err != nil {
 		s.serverError(w, err)
 		return
@@ -871,7 +1003,7 @@ func (s *Server) publicPage(w http.ResponseWriter, r *http.Request) (store.Page,
 		s.serverError(w, err)
 		return store.Page{}, false
 	}
-	if !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) {
+	if page.SealedAt != nil || !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) {
 		writeError(w, http.StatusNotFound, "page_closed", "this page is no longer accepting uploads")
 		return store.Page{}, false
 	}
@@ -976,12 +1108,13 @@ type custodyManifest struct {
 }
 
 type custodyManifestPage struct {
-	ID                      int64  `json:"id"`
-	Slug                    string `json:"slug"`
-	Title                   string `json:"title"`
-	E2EEnabled              bool   `json:"e2e_enabled"`
-	E2EAlgorithm            string `json:"e2e_algorithm,omitempty"`
-	E2EPublicKeyFingerprint string `json:"e2e_public_key_fingerprint,omitempty"`
+	ID                      int64      `json:"id"`
+	Slug                    string     `json:"slug"`
+	Title                   string     `json:"title"`
+	E2EEnabled              bool       `json:"e2e_enabled"`
+	E2EAlgorithm            string     `json:"e2e_algorithm,omitempty"`
+	E2EPublicKeyFingerprint string     `json:"e2e_public_key_fingerprint,omitempty"`
+	SealedAt                *time.Time `json:"sealed_at,omitempty"`
 }
 
 type custodyManifestFile struct {
@@ -1099,6 +1232,7 @@ func buildCustodyManifest(page store.Page, uploads []store.Upload, events []stor
 			E2EEnabled:              page.E2EEnabled,
 			E2EAlgorithm:            page.E2EAlgorithm,
 			E2EPublicKeyFingerprint: page.E2EPublicKeyFingerprint,
+			SealedAt:                page.SealedAt,
 		},
 		Files:       files,
 		HandlingLog: log,
@@ -1121,6 +1255,43 @@ func jsonDetail(value any) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func adminActionDetail(page store.Page, detail map[string]any) string {
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	if page.SealedAt != nil {
+		detail["post_seal"] = true
+		detail["sealed_at"] = page.SealedAt
+	}
+	return jsonDetail(detail)
+}
+
+func pagePatchFields(req pagePatchRequest) []string {
+	fields := make([]string, 0, 7)
+	if req.Title != nil {
+		fields = append(fields, "title")
+	}
+	if req.Description.Set {
+		fields = append(fields, "description")
+	}
+	if req.PIN.Set {
+		fields = append(fields, "pin")
+	}
+	if req.MaxFileSize.Set {
+		fields = append(fields, "max_file_size")
+	}
+	if req.AllowedExt.Set {
+		fields = append(fields, "allowed_ext")
+	}
+	if req.ExpiresAt.Set {
+		fields = append(fields, "expires_at")
+	}
+	if req.IsActive != nil {
+		fields = append(fields, "is_active")
+	}
+	return fields
 }
 
 func rawJSONDetail(raw string) json.RawMessage {

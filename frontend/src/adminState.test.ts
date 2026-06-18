@@ -21,6 +21,9 @@ import {
   groupFilesBySubmission,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
+  receiptStatusHelp,
+  receiptStatusLabel,
+  sealActionHelp,
   selectedPageForID,
   submitStoredPrivateKeyUnlock
 } from "./adminState";
@@ -163,5 +166,17 @@ describe("admin page state", () => {
       receiptToken: "receipt-b",
       receiptStatus: "reviewed"
     });
+  });
+
+  it("describes receipt status with compact label and tooltip copy", () => {
+    expect(receiptStatusLabel).toBe("File status");
+    expect(receiptStatusHelp).toContain("receipt link");
+    expect(receiptStatusHelp).toContain("does not grant file access");
+  });
+
+  it("describes what sealing a page does", () => {
+    expect(sealActionHelp).toContain("closes public uploads");
+    expect(sealActionHelp).toContain("prevents reopening");
+    expect(sealActionHelp).toContain("custody log");
   });
 });

@@ -23,10 +23,12 @@ import {
   FileKey2,
   FileDown,
   FileText,
+  CircleHelp,
   KeyRound,
   LogOut,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   UploadCloud
 } from "lucide-react";
@@ -40,6 +42,9 @@ import {
   LoadedFiles,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
+  receiptStatusHelp,
+  receiptStatusLabel,
+  sealActionHelp,
   selectedPageForID,
   submitStoredPrivateKeyUnlock
 } from "../adminState";
@@ -217,6 +222,16 @@ export default function AdminDashboard() {
       body: JSON.stringify({ is_active: !page.is_active })
     });
     await loadPages();
+  }
+
+  async function sealPage(page: PageSummary) {
+    if (!window.confirm("Seal this page? Public uploads will close and post-seal admin actions will be recorded.")) return;
+    await api<PageSummary>(`/api/admin/pages/${page.id}/seal`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await loadPages();
+    setSelectedID(page.id);
   }
 
   async function deletePage(page: PageSummary, filesToo: boolean) {
@@ -517,11 +532,12 @@ export default function AdminDashboard() {
                 className={`page-row ${selected?.id === page.id ? "selected" : ""}`}
                 onClick={() => setSelectedID(page.id)}
               >
-                <span className={`status-dot ${page.is_active ? "on" : "off"}`} />
+                <span className={`status-dot ${page.sealed_at ? "sealed" : page.is_active ? "on" : "off"}`} />
                 <span>
                   <strong>{page.title}</strong>
                   <small>
                     {page.upload_count} files · {formatBytes(page.total_bytes)}
+                    {page.sealed_at ? " · Sealed" : ""}
                     {page.e2e_enabled ? " · E2E" : ""}
                   </small>
                 </span>
@@ -538,17 +554,40 @@ export default function AdminDashboard() {
                   <p className="eyebrow">{selected.slug}</p>
                   <h2>{selected.title}</h2>
                   {selected.description && <p className="muted">{selected.description}</p>}
+                  {selected.sealed_at && <p className="muted">Sealed {formatDate(selected.sealed_at)}</p>}
                 </div>
                 <div className="detail-actions">
-                  <button className="secondary-action" onClick={() => toggleActive(selected)}>
-                    {selected.is_active ? "Deactivate" : "Activate"}
-                  </button>
-                  <button className="icon-button danger" onClick={() => deletePage(selected, false)} title="Delete page">
-                    <Trash2 size={18} />
-                  </button>
-                  <button className="icon-button danger" onClick={() => deletePage(selected, true)} title="Delete page and files">
-                    <Archive size={18} />
-                  </button>
+                  {selected.sealed_at ? (
+                    <span className="sealed-badge">
+                      <ShieldCheck size={17} />
+                      Sealed
+                    </span>
+                  ) : (
+                    <>
+                      <button className="secondary-action" onClick={() => toggleActive(selected)}>
+                        {selected.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                      <span className="action-tooltip">
+                        <button
+                          className="secondary-action"
+                          onClick={() => sealPage(selected)}
+                          aria-describedby={`seal-action-help-${selected.id}`}
+                        >
+                          <ShieldCheck size={17} />
+                          Seal
+                        </button>
+                        <span className="tooltip-panel" id={`seal-action-help-${selected.id}`} role="tooltip">
+                          {sealActionHelp}
+                        </span>
+                      </span>
+                      <button className="icon-button danger" onClick={() => deletePage(selected, false)} title="Delete page">
+                        <Trash2 size={18} />
+                      </button>
+                      <button className="icon-button danger" onClick={() => deletePage(selected, true)} title="Delete page and files">
+                        <Archive size={18} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -660,10 +699,24 @@ export default function AdminDashboard() {
                       <div className="submission-meta-actions">
                         <code>{group.submissionID}</code>
                         <label className="receipt-status-field">
-                          <span>Status</span>
+                          <span className="receipt-status-label">
+                            {receiptStatusLabel}
+                            <span
+                              className="help-tooltip"
+                              tabIndex={0}
+                              aria-label={receiptStatusHelp}
+                              aria-describedby={`receipt-status-help-${group.submissionID}`}
+                            >
+                              <CircleHelp size={14} aria-hidden="true" />
+                              <span className="tooltip-panel" id={`receipt-status-help-${group.submissionID}`} role="tooltip">
+                                {receiptStatusHelp}
+                              </span>
+                            </span>
+                          </span>
                           <select
                             value={group.receiptStatus ?? "received"}
                             onChange={(event) => void updateReceiptStatus(group, event.target.value as ReceiptStatus)}
+                            aria-describedby={`receipt-status-help-${group.submissionID}`}
                           >
                             {receiptStatuses.map((status) => (
                               <option key={status} value={status}>

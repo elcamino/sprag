@@ -548,6 +548,19 @@ select:focus {
   background: var(--success);
 }
 
+.status-dot.sealed {
+  background: var(--accent);
+}
+
+.sealed-badge {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .detail-panel {
   min-height: calc(100vh - 104px);
   padding: 22px;
@@ -640,9 +653,61 @@ select:focus {
   gap: 4px;
 }
 
-.receipt-status-field span {
+.receipt-status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-muted);
   font-size: 0.7rem;
+}
+
+.help-tooltip,
+.action-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+
+.help-tooltip {
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.help-tooltip:focus-visible {
+  color: var(--accent);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.tooltip-panel {
+  position: absolute;
+  z-index: 20;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: min(240px, 70vw);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-strong);
+  box-shadow: var(--shadow);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.help-tooltip:hover .tooltip-panel,
+.help-tooltip:focus .tooltip-panel,
+.action-tooltip:hover .tooltip-panel,
+.action-tooltip:focus-within .tooltip-panel {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 .receipt-status-field select {

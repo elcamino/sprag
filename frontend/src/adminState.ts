@@ -39,6 +39,11 @@ export type SubmissionFileGroup = {
   totalBytes: number;
 };
 
+export const receiptStatusLabel = "File status";
+export const receiptStatusHelp = "Shown on the uploader's receipt link. This does not grant file access.";
+export const sealActionHelp =
+  "Seals this page: closes public uploads, prevents reopening or page deletion, and records later admin actions in the custody log.";
+
 export function selectedPageForID(pages: PageSummary[], selectedID: number | null): PageSummary | null {
   if (selectedID === null) {
     return pages[0] ?? null;

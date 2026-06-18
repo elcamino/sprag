@@ -34,6 +34,8 @@ var (
 	ErrNotFound = errors.New("not found")
 	// ErrDuplicateSlug is returned by CreatePage when the slug already exists.
 	ErrDuplicateSlug = errors.New("duplicate slug")
+	// ErrPageSealed is returned when an operation would undo a sealed page.
+	ErrPageSealed = errors.New("page sealed")
 	// ErrInvalidReceiptStatus is returned when a receipt status would turn the
 	// status-only receipt into something outside the supported workflow.
 	ErrInvalidReceiptStatus = errors.New("invalid receipt status")
@@ -74,6 +76,7 @@ type Page struct {
 	E2EPublicKey            string     `json:"e2e_public_key,omitempty"`
 	E2EPublicKeyFingerprint string     `json:"e2e_public_key_fingerprint,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
+	SealedAt                *time.Time `json:"sealed_at,omitempty"`
 	UploadCount             int64      `json:"upload_count"`
 	TotalBytes              int64      `json:"total_bytes"`
 }
@@ -266,7 +269,8 @@ CREATE TABLE IF NOT EXISTS pages (
   e2e_algorithm TEXT,
   e2e_public_key TEXT,
   e2e_public_key_fingerprint TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  sealed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS submission_envelopes (
   id INTEGER PRIMARY KEY,
@@ -321,6 +325,7 @@ CREATE INDEX IF NOT EXISTS idx_custody_events_page ON custody_events(page_id, cr
 		{"pages", "e2e_algorithm", "TEXT"},
 		{"pages", "e2e_public_key", "TEXT"},
 		{"pages", "e2e_public_key_fingerprint", "TEXT"},
+		{"pages", "sealed_at", "TEXT"},
 		{"uploads", "submission_envelope_id", "INTEGER REFERENCES submission_envelopes(id) ON DELETE SET NULL"},
 		{"uploads", "encryption_mode", "TEXT"},
 		{"uploads", "encryption_algorithm", "TEXT"},
@@ -392,7 +397,7 @@ func (s *SQLite) ListPages(ctx context.Context) ([]Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at,
+       p.created_at, p.sealed_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -419,7 +424,7 @@ func (s *SQLite) GetPage(ctx context.Context, id int64) (Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at,
+       p.created_at, p.sealed_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -433,7 +438,7 @@ func (s *SQLite) GetPageBySlug(ctx context.Context, slug string) (Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at,
+       p.created_at, p.sealed_at,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -466,6 +471,9 @@ func (s *SQLite) UpdatePage(ctx context.Context, id int64, in PageUpdate) (Page,
 		page.ExpiresAt = in.ExpiresAt.Value
 	}
 	if in.IsActive != nil {
+		if page.SealedAt != nil && *in.IsActive {
+			return Page{}, ErrPageSealed
+		}
 		page.IsActive = *in.IsActive
 	}
 	active := 0
@@ -488,6 +496,13 @@ WHERE id = ?`,
 }
 
 func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
+	page, err := s.GetPage(ctx, id)
+	if err != nil {
+		return err
+	}
+	if page.SealedAt != nil {
+		return ErrPageSealed
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM pages WHERE id = ?`, id)
 	if err != nil {
 		return err
@@ -497,6 +512,22 @@ func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *SQLite) SealPage(ctx context.Context, id int64) (Page, error) {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE pages
+SET sealed_at = coalesce(sealed_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    is_active = 0
+WHERE id = ?`, id)
+	if err != nil {
+		return Page{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Page{}, ErrNotFound
+	}
+	return s.GetPage(ctx, id)
 }
 
 func (s *SQLite) EnsureSubmissionEnvelope(ctx context.Context, in SubmissionEnvelopeCreate) (SubmissionEnvelope, error) {
@@ -824,12 +855,13 @@ func scanPage(row scanner) (Page, error) {
 	var page Page
 	var max sql.NullInt64
 	var expires sql.NullString
+	var sealed sql.NullString
 	var created string
 	var active int
 	var e2eEnabled int
 	err := row.Scan(&page.ID, &page.Slug, &page.Title, &page.Description, &page.PinHash, &max, &page.AllowedExt, &expires, &active,
 		&e2eEnabled, &page.E2EAlgorithm, &page.E2EPublicKey, &page.E2EPublicKeyFingerprint,
-		&created, &page.UploadCount, &page.TotalBytes)
+		&created, &sealed, &page.UploadCount, &page.TotalBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Page{}, ErrNotFound
 	}
@@ -851,6 +883,13 @@ func scanPage(row scanner) (Page, error) {
 		return Page{}, err
 	}
 	page.CreatedAt = parsed
+	if sealed.Valid && sealed.String != "" {
+		parsed, err := parseDBTime(sealed.String)
+		if err != nil {
+			return Page{}, err
+		}
+		page.SealedAt = &parsed
+	}
 	page.IsActive = active == 1
 	page.E2EEnabled = e2eEnabled == 1
 	return page, nil

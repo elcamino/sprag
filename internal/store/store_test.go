@@ -214,6 +214,51 @@ func TestSQLiteStoreUpdatesReceiptStatus(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreSealsPageOnce(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	page, err := db.CreatePage(ctx, store.PageCreate{
+		Slug:  "seal-page-1",
+		Title: "Seal page",
+	})
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	if page.SealedAt != nil {
+		t.Fatalf("new page sealed_at = %v, want nil", page.SealedAt)
+	}
+
+	sealed, err := db.SealPage(ctx, page.ID)
+	if err != nil {
+		t.Fatalf("SealPage failed: %v", err)
+	}
+	if sealed.SealedAt == nil || sealed.IsActive {
+		t.Fatalf("sealed page = %#v, want sealed_at and inactive", sealed)
+	}
+	firstSealedAt := *sealed.SealedAt
+
+	again, err := db.SealPage(ctx, page.ID)
+	if err != nil {
+		t.Fatalf("second SealPage failed: %v", err)
+	}
+	if again.SealedAt == nil || !again.SealedAt.Equal(firstSealedAt) {
+		t.Fatalf("second SealPage changed sealed_at from %v to %v", firstSealedAt, again.SealedAt)
+	}
+
+	pages, err := db.ListPages(ctx)
+	if err != nil {
+		t.Fatalf("ListPages failed: %v", err)
+	}
+	if len(pages) != 1 || pages[0].SealedAt == nil {
+		t.Fatalf("ListPages missing sealed_at: %#v", pages)
+	}
+}
+
 func TestSQLiteStoreRejectsDuplicateSlugs(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))

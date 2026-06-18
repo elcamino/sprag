@@ -398,6 +398,117 @@ func TestAdminManifestIncludesStoredObjectHashesAndHandlingLog(t *testing.T) {
 	}
 }
 
+func TestAdminCanSealPageAndClosePublicIntake(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Sealed intake"})
+
+	seal := performJSON(t, handler, http.MethodPost, "/api/admin/pages/1/seal", map[string]string{
+		"reason": "Matter closed",
+	}, session, csrfHeader())
+	if seal.Code != http.StatusOK {
+		t.Fatalf("seal status = %d body=%s", seal.Code, seal.Body.String())
+	}
+	var sealed struct {
+		SealedAt string `json:"sealed_at"`
+	}
+	decodeJSON(t, seal.Body.Bytes(), &sealed)
+	if sealed.SealedAt == "" {
+		t.Fatalf("sealed page missing sealed_at: %s", seal.Body.String())
+	}
+
+	pages := perform(t, handler, http.MethodGet, "/api/admin/pages", nil, session, nil)
+	if pages.Code != http.StatusOK {
+		t.Fatalf("pages status = %d body=%s", pages.Code, pages.Body.String())
+	}
+	if !strings.Contains(pages.Body.String(), `"sealed_at"`) {
+		t.Fatalf("admin page list did not expose sealed_at: %s", pages.Body.String())
+	}
+
+	public := perform(t, handler, http.MethodGet, "/api/u/"+slug, nil, nil, nil)
+	if public.Code != http.StatusNotFound {
+		t.Fatalf("public sealed page status = %d body=%s, want 404", public.Code, public.Body.String())
+	}
+	upload := performMultipart(t, handler, "/api/u/"+slug, "file", "late.pdf", []byte("late"), nil)
+	if upload.Code != http.StatusNotFound {
+		t.Fatalf("sealed upload status = %d body=%s, want 404", upload.Code, upload.Body.String())
+	}
+	reactivate := performJSON(t, handler, http.MethodPatch, "/api/admin/pages/1", map[string]bool{
+		"is_active": true,
+	}, session, csrfHeader())
+	if reactivate.Code != http.StatusConflict {
+		t.Fatalf("sealed page reactivate status = %d body=%s, want 409", reactivate.Code, reactivate.Body.String())
+	}
+	if !strings.Contains(reactivate.Body.String(), "page_sealed") {
+		t.Fatalf("expected page_sealed error, got %s", reactivate.Body.String())
+	}
+
+	manifest := perform(t, handler, http.MethodGet, "/api/admin/pages/1/manifest", nil, session, nil)
+	if manifest.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d body=%s", manifest.Code, manifest.Body.String())
+	}
+	if !strings.Contains(manifest.Body.String(), `"sealed_at"`) || !strings.Contains(manifest.Body.String(), `"page.sealed"`) {
+		t.Fatalf("manifest missing sealed state/event: %s", manifest.Body.String())
+	}
+
+	deletePage := perform(t, handler, http.MethodDelete, "/api/admin/pages/1", nil, session, csrfHeader())
+	if deletePage.Code != http.StatusConflict {
+		t.Fatalf("sealed page delete status = %d body=%s, want 409", deletePage.Code, deletePage.Body.String())
+	}
+	if !strings.Contains(deletePage.Body.String(), "page_sealed") {
+		t.Fatalf("expected page_sealed error, got %s", deletePage.Body.String())
+	}
+}
+
+func TestPostSealAdminActionsAreLoggedInManifest(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Post seal handling"})
+	upload := performMultipart(t, handler, "/api/u/"+slug, "file", "evidence.pdf", []byte("evidence"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+
+	seal := performJSON(t, handler, http.MethodPost, "/api/admin/pages/1/seal", map[string]string{
+		"reason": "Deadline passed",
+	}, session, csrfHeader())
+	if seal.Code != http.StatusOK {
+		t.Fatalf("seal status = %d body=%s", seal.Code, seal.Body.String())
+	}
+	download := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files/1", nil, session, nil)
+	if download.Code != http.StatusOK {
+		t.Fatalf("download status = %d body=%s", download.Code, download.Body.String())
+	}
+	zipResp := perform(t, handler, http.MethodGet, "/api/admin/pages/1/zip", nil, session, nil)
+	if zipResp.Code != http.StatusOK {
+		t.Fatalf("zip status = %d body=%s", zipResp.Code, zipResp.Body.String())
+	}
+	update := performJSON(t, handler, http.MethodPatch, "/api/admin/pages/1", map[string]string{
+		"description": "Handled after seal",
+	}, session, csrfHeader())
+	if update.Code != http.StatusOK {
+		t.Fatalf("update status = %d body=%s", update.Code, update.Body.String())
+	}
+	deleteFile := perform(t, handler, http.MethodDelete, "/api/admin/pages/1/files/1", nil, session, csrfHeader())
+	if deleteFile.Code != http.StatusNoContent {
+		t.Fatalf("delete file status = %d body=%s", deleteFile.Code, deleteFile.Body.String())
+	}
+
+	manifest := perform(t, handler, http.MethodGet, "/api/admin/pages/1/manifest", nil, session, nil)
+	if manifest.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d body=%s", manifest.Code, manifest.Body.String())
+	}
+	body := manifest.Body.String()
+	for _, want := range []string{"page.sealed", "file.downloaded", "page.exported", "page.updated", "file.deleted"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("manifest missing %s event: %s", want, body)
+		}
+	}
+	if count := strings.Count(body, `"post_seal":true`); count < 4 {
+		t.Fatalf("manifest contains %d post-seal events, want at least 4: %s", count, body)
+	}
+}
+
 func TestE2EManifestHashesStoredCiphertextWithoutPlaintextName(t *testing.T) {
 	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
 		c.E2EIntake.Enabled = true
