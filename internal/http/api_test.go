@@ -20,6 +20,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -255,6 +258,131 @@ func TestUploadRejectsOversizedFileWithoutWritingBlob(t *testing.T) {
 	}
 	if len(blobs.objects) != 0 {
 		t.Fatalf("expected no blob writes for rejected upload, got %d", len(blobs.objects))
+	}
+}
+
+func TestUploadStoresPlainIPByDefault(t *testing.T) {
+	handler, _ := newTestHandler(t)
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Plain IP intake"})
+
+	upload := performMultipart(t, handler, "/api/u/"+slug, "file", "plain.txt", []byte("hello"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	var listed []struct {
+		UploaderIP string `json:"uploader_ip"`
+	}
+	decodeJSON(t, files.Body.Bytes(), &listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected one listed file, got %d", len(listed))
+	}
+	if listed[0].UploaderIP != "192.0.2.1" {
+		t.Fatalf("uploader_ip = %q, want plaintext test peer IP", listed[0].UploaderIP)
+	}
+}
+
+func TestUploadStoresHMACIPIdentifierWhenConfigured(t *testing.T) {
+	secret := []byte("12345678901234567890123456789012")
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.IPStorageMode = "hmac-sha256"
+		c.IPHashSecret = secret
+	})
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Hashed IP intake"})
+
+	upload := performMultipart(t, handler, "/api/u/"+slug, "file", "hashed.txt", []byte("hello"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	var listed []struct {
+		UploaderIP string `json:"uploader_ip"`
+	}
+	decodeJSON(t, files.Body.Bytes(), &listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected one listed file, got %d", len(listed))
+	}
+	want := expectedIPDigest(secret, "192.0.2.1")
+	if listed[0].UploaderIP != want {
+		t.Fatalf("uploader_ip = %q, want %q", listed[0].UploaderIP, want)
+	}
+	if strings.Contains(listed[0].UploaderIP, "192.0.2.1") {
+		t.Fatalf("hashed uploader_ip leaked plaintext IP: %q", listed[0].UploaderIP)
+	}
+}
+
+func TestNewRewritesExistingUploaderIPsWhenHMACStorageConfigured(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+	page, err := db.CreatePage(ctx, store.PageCreate{Slug: "hash-old-ips-1", Title: "Existing"})
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+	submissionID := "33333333-3333-4333-8333-333333333333"
+	if _, err := db.CreateUpload(ctx, store.UploadCreate{
+		PageID:       page.ID,
+		S3Key:        "pages/existing/file.txt",
+		OriginalName: "file.txt",
+		SizeBytes:    5,
+		UploaderIP:   "198.51.100.77",
+		SubmissionID: submissionID,
+	}); err != nil {
+		t.Fatalf("CreateUpload failed: %v", err)
+	}
+
+	secret := []byte("12345678901234567890123456789012")
+	_, err = httpapi.New(httpapi.Dependencies{
+		Store:     db,
+		BlobStore: &memoryBlobStore{objects: map[string][]byte{}},
+		Config: httpapi.Config{
+			BaseURL:           "https://sprag.example.test",
+			SessionSecret:     []byte("12345678901234567890123456789012"),
+			AdminUsername:     "admin",
+			AdminPassword:     "correct-password",
+			MaxFileSize:       1024 * 1024,
+			S3Prefix:          "pages/",
+			IPStorageMode:     "hmac-sha256",
+			IPHashSecret:      secret,
+			AllowedExtensions: nil,
+			SecureCookies:     true,
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	want := expectedIPDigest(secret, "198.51.100.77")
+	files, err := db.ListUploads(ctx, page.ID)
+	if err != nil {
+		t.Fatalf("ListUploads failed: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected one upload, got %d", len(files))
+	}
+	if files[0].UploaderIP != want {
+		t.Fatalf("upload uploader_ip = %q, want %q", files[0].UploaderIP, want)
+	}
+	envelope, err := db.GetSubmissionEnvelope(ctx, page.ID, submissionID)
+	if err != nil {
+		t.Fatalf("GetSubmissionEnvelope failed: %v", err)
+	}
+	if envelope.UploaderIP != want {
+		t.Fatalf("envelope uploader_ip = %q, want %q", envelope.UploaderIP, want)
 	}
 }
 
@@ -762,6 +890,12 @@ func decodeJSON(t *testing.T, data []byte, dest any) {
 	if err := json.Unmarshal(data, dest); err != nil {
 		t.Fatalf("decode JSON %s: %v", string(data), err)
 	}
+}
+
+func expectedIPDigest(secret []byte, ip string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(ip))
+	return "ip-hmac-sha256:v1:" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func csrfHeader() map[string]string {

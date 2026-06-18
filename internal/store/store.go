@@ -517,6 +517,67 @@ func (s *SQLite) DeleteUpload(ctx context.Context, pageID, uploadID int64) error
 	return nil
 }
 
+func (s *SQLite) RewriteUploaderIPs(ctx context.Context, rewrite func(string) string) error {
+	if rewrite == nil {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, table := range []string{"uploads", "submission_envelopes"} {
+		if err := rewriteUploaderIPs(ctx, tx, table, rewrite); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func rewriteUploaderIPs(ctx context.Context, tx *sql.Tx, table string, rewrite func(string) string) error {
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT id, uploader_ip FROM %s WHERE uploader_ip IS NOT NULL AND uploader_ip <> ''`, table))
+	if err != nil {
+		return err
+	}
+	type update struct {
+		id int64
+		ip string
+	}
+	var updates []update
+	for rows.Next() {
+		var id int64
+		var ip string
+		if err := rows.Scan(&id, &ip); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		next := rewrite(ip)
+		if next != ip {
+			updates = append(updates, update{id: id, ip: next})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %s SET uploader_ip = nullif(?, '') WHERE id = ?`, table))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, update := range updates {
+		if _, err := stmt.ExecContext(ctx, update.ip, update.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
