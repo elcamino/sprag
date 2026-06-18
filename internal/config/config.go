@@ -38,6 +38,8 @@ type Config struct {
 	AdminUsername     string    `json:"admin_username"`
 	AdminPassword     string    `json:"-"`
 	AdminPasswordHash string    `json:"-"`
+	IPStorageMode     string    `json:"ip_storage_mode"`
+	IPHashSecret      []byte    `json:"-"`
 	MaxFileSize       int64     `json:"max_file_size"`
 	AllowedExtensions []string  `json:"allowed_ext,omitempty"`
 	DBPath            string    `json:"db_path"`
@@ -90,6 +92,7 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		AdminUsername:     get("ADMIN_USERNAME", "admin"),
 		AdminPassword:     get("ADMIN_PASSWORD", ""),
 		AdminPasswordHash: get("ADMIN_PASSWORD_HASH", ""),
+		IPStorageMode:     "plain",
 		DBPath:            get("DB_PATH", "/data/sprag.db"),
 		S3: S3Config{
 			Endpoint:  require("S3_ENDPOINT"),
@@ -126,6 +129,27 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("TRUSTED_PROXY_HOPS must be a non-negative integer")
 	}
 	cfg.TrustedProxyHops = hops
+
+	ipStorageMode := strings.ToLower(get("IP_STORAGE_MODE", "plain"))
+	switch ipStorageMode {
+	case "plain":
+		cfg.IPStorageMode = "plain"
+	case "hmac-sha256":
+		cfg.IPStorageMode = "hmac-sha256"
+		secret := get("IP_HASH_SECRET", "")
+		if secret == "" {
+			missing = append(missing, "IP_HASH_SECRET")
+			break
+		}
+		decoded, err := base64.StdEncoding.DecodeString(secret)
+		if err != nil || len(decoded) < 32 {
+			missing = append(missing, "IP_HASH_SECRET(base64 >=32 bytes)")
+			break
+		}
+		cfg.IPHashSecret = decoded
+	default:
+		return Config{}, fmt.Errorf("IP_STORAGE_MODE must be plain or hmac-sha256")
+	}
 
 	e2eEnabled, err := strconv.ParseBool(get("E2E_INTAKE_ENABLED", "false"))
 	if err != nil {
@@ -175,6 +199,7 @@ func (c Config) Redacted() string {
 		SessionSecret     string `json:"session_secret"`
 		AdminPassword     string `json:"admin_password"`
 		AdminPasswordHash string `json:"admin_password_hash"`
+		IPHashSecret      string `json:"ip_hash_secret"`
 		S3AccessKey       string `json:"s3_access_key"`
 		S3SecretKey       string `json:"s3_secret_key"`
 	}{
@@ -182,6 +207,7 @@ func (c Config) Redacted() string {
 		SessionSecret:     redact(c.SessionSecret != nil),
 		AdminPassword:     redact(c.AdminPassword != ""),
 		AdminPasswordHash: redact(c.AdminPasswordHash != ""),
+		IPHashSecret:      redact(c.IPHashSecret != nil),
 		S3AccessKey:       redact(c.S3.AccessKey != ""),
 		S3SecretKey:       redact(c.S3.SecretKey != ""),
 	}

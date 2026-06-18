@@ -124,6 +124,8 @@ func run(logger *slog.Logger) error {
 			AdminUsername:     cfg.AdminUsername,
 			AdminPassword:     cfg.AdminPassword,
 			AdminPasswordHash: cfg.AdminPasswordHash,
+			IPStorageMode:     cfg.IPStorageMode,
+			IPHashSecret:      cfg.IPHashSecret,
 			MaxFileSize:       cfg.MaxFileSize,
 			AllowedExtensions: cfg.AllowedExtensions,
 			S3Prefix:          cfg.S3.Prefix,

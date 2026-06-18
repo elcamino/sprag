@@ -102,6 +102,53 @@ func TestLoadFromLookupParsesTrustedProxyHops(t *testing.T) {
 	}
 }
 
+func TestLoadFromLookupParsesHMACIPStorage(t *testing.T) {
+	values := baseValues()
+	values["IP_STORAGE_MODE"] = "hmac-sha256"
+	values["IP_HASH_SECRET"] = base64.StdEncoding.EncodeToString([]byte("12345678901234567890123456789012"))
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if cfg.IPStorageMode != "hmac-sha256" {
+		t.Fatalf("expected IPStorageMode hmac-sha256, got %q", cfg.IPStorageMode)
+	}
+	if string(cfg.IPHashSecret) != "12345678901234567890123456789012" {
+		t.Fatalf("unexpected IPHashSecret %q", string(cfg.IPHashSecret))
+	}
+	redacted := cfg.Redacted()
+	if strings.Contains(redacted, values["IP_HASH_SECRET"]) || strings.Contains(redacted, "12345678901234567890123456789012") {
+		t.Fatalf("redacted config leaked IP hash secret: %s", redacted)
+	}
+}
+
+func TestLoadFromLookupRequiresIPHashSecretForHMACStorage(t *testing.T) {
+	values := baseValues()
+	values["IP_STORAGE_MODE"] = "hmac-sha256"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected missing IP_HASH_SECRET to fail")
+	}
+	if !strings.Contains(err.Error(), "IP_HASH_SECRET") {
+		t.Fatalf("expected IP_HASH_SECRET error, got %q", err.Error())
+	}
+}
+
+func TestLoadFromLookupRejectsUnsupportedIPStorageMode(t *testing.T) {
+	values := baseValues()
+	values["IP_STORAGE_MODE"] = "sha512"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected unsupported IP storage mode to fail")
+	}
+	if !strings.Contains(err.Error(), "IP_STORAGE_MODE") {
+		t.Fatalf("expected IP_STORAGE_MODE error, got %q", err.Error())
+	}
+}
+
 func TestLoadFromLookupParsesE2EIntakeConfig(t *testing.T) {
 	values := baseValues()
 	values["E2E_INTAKE_ENABLED"] = "true"
@@ -198,6 +245,9 @@ func TestLoadFromLookupParsesDefaultsAndRedactsSecrets(t *testing.T) {
 	}
 	if cfg.TrustedProxyHops != 1 {
 		t.Fatalf("expected default TrustedProxyHops 1, got %d", cfg.TrustedProxyHops)
+	}
+	if cfg.IPStorageMode != "plain" {
+		t.Fatalf("expected default IPStorageMode plain, got %q", cfg.IPStorageMode)
 	}
 	if got := cfg.AllowedExtensions; len(got) != 3 || got[0] != "pdf" || got[1] != "png" || got[2] != "zip" {
 		t.Fatalf("unexpected allowed extensions %#v", got)

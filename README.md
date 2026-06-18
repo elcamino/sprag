@@ -85,7 +85,7 @@ Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 
 - **Unguessable upload pages** — 24-character base62 slugs from `crypto/rand`. A page has a title, optional description, optional PIN, optional expiry, optional per-page max file size, an optional allow-list of extensions, and an active flag.
 - **Drag-and-drop uploads** with multi-file support and per-file progress (bytes + ETA).
-- **Optional PIN** per page (bcrypt-hashed, rate-limited per slug+IP).
+- **Optional PIN** per page (bcrypt-hashed, rate-limited per slug+client identifier).
 - **Admin dashboard** — create/edit/delete pages, list uploads with name/size/time, download a single file, or download a whole page as a streamed `.zip`.
 - **QR codes and copy buttons** for sharing capability URLs.
 - **Server-blind post-quantum E2E intake** (see below).
@@ -96,7 +96,8 @@ Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 - **No uploader-reachable listing.** The public surface is exactly `GET /api/u/:slug` (metadata), `POST /api/u/:slug/pin`, and `POST /api/u/:slug`. Upload responses never include other files.
 - **Unguessable capability URLs.** At least 24 chars, base62, cryptographically random.
 - **Admin password** hashed with bcrypt. Supply it as plaintext (`ADMIN_PASSWORD`) or — better — as a precomputed bcrypt hash (`ADMIN_PASSWORD_HASH`) so the plaintext never lives in your config. Passwords beyond bcrypt's 72-byte limit are handled via an internal SHA-256 prehash.
-- **Rate limiting.** Admin login 5/min/IP, PIN attempts 10/min per slug+IP, keyed on the real client IP (see `TRUSTED_PROXY_HOPS`).
+- **IP metadata policy.** By default Sprag stores uploader IPs as plaintext for compatibility. Set `IP_STORAGE_MODE=hmac-sha256` and `IP_HASH_SECRET` to store deterministic keyed HMAC-SHA-256 identifiers instead; startup rewrites existing plaintext uploader IPs in SQLite to `ip-hmac-sha256:v1:<digest>`.
+- **Rate limiting.** Admin login 5/min/client identifier, PIN attempts 10/min per slug+client identifier, keyed on the real client IP or its HMAC identifier (see `TRUSTED_PROXY_HOPS`).
 - **Sessions.** Stateless HMAC-signed cookies, 7-day expiry, `HttpOnly` + `Secure` + `SameSite=Lax`.
 - **CSRF.** Admin mutations require the `X-Sprag-CSRF` custom header in addition to the same-site cookie.
 - **Streaming with hard caps.** The size limit is enforced by a counting reader while streaming; an oversized upload aborts the S3 multipart upload instead of trusting `Content-Length`. Files are never buffered whole in memory or on disk.
@@ -210,6 +211,8 @@ Sprag loads `.env` if present and then reads environment variables. Startup fail
 | `ADMIN_USERNAME` | | `admin` | |
 | `ADMIN_PASSWORD` | Yes* | | Plaintext, bcrypt-hashed in memory at boot. |
 | `ADMIN_PASSWORD_HASH` | Yes* | | Precomputed bcrypt hash (preferred). Takes precedence over `ADMIN_PASSWORD`. |
+| `IP_STORAGE_MODE` | | `plain` | `plain` stores resolved uploader IPs. `hmac-sha256` stores deterministic `ip-hmac-sha256:v1:` identifiers and rewrites existing plaintext uploader IPs at startup. |
+| `IP_HASH_SECRET` | Yes* | | Base64; required only when `IP_STORAGE_MODE=hmac-sha256`; must decode to at least 32 bytes. Protect it: IPs are low-entropy, so the secret is what prevents offline enumeration. |
 | `MAX_FILE_SIZE` | | `5368709120` (5 GiB) | Global default; per-page limits may only lower it. |
 | `ALLOWED_EXT` | | *(any)* | Comma list, e.g. `pdf,png,zip`. A hard ceiling per-page lists may narrow but not widen. |
 | `TRUSTED_PROXY_HOPS` | | `1` | Number of trusted proxies appending to `X-Forwarded-For`. `0` = directly exposed. |

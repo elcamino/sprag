@@ -31,6 +31,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -64,6 +65,8 @@ type Config struct {
 	AdminUsername     string
 	AdminPassword     string
 	AdminPasswordHash string
+	IPStorageMode     string
+	IPHashSecret      []byte
 	MaxFileSize       int64
 	AllowedExtensions []string
 	S3Prefix          string
@@ -94,6 +97,7 @@ type Server struct {
 	logger    *slog.Logger
 	clock     func() time.Time
 	passHash  []byte
+	ipIDs     ipIdentifier
 	loginRate *rateLimiter
 	pinRate   *rateLimiter
 }
@@ -116,6 +120,10 @@ func New(deps Dependencies) (http.Handler, error) {
 	}
 	if deps.Config.MaxFileSize <= 0 {
 		return nil, fmt.Errorf("max file size must be positive")
+	}
+	ipIDs, err := newIPIdentifier(deps.Config.IPStorageMode, deps.Config.IPHashSecret)
+	if err != nil {
+		return nil, err
 	}
 	if deps.Config.E2EIntake.Enabled {
 		if deps.Config.E2EIntake.Algorithm == "" {
@@ -149,6 +157,11 @@ func New(deps Dependencies) (http.Handler, error) {
 		}
 		passHash = []byte(hash)
 	}
+	if ipIDs.Hashed() {
+		if err := deps.Store.RewriteUploaderIPs(context.Background(), ipIDs.RewriteStored); err != nil {
+			return nil, fmt.Errorf("rewrite uploader IPs: %w", err)
+		}
+	}
 	s := &Server{
 		store:     deps.Store,
 		blobs:     deps.BlobStore,
@@ -156,6 +169,7 @@ func New(deps Dependencies) (http.Handler, error) {
 		logger:    deps.Logger,
 		clock:     deps.Clock,
 		passHash:  passHash,
+		ipIDs:     ipIDs,
 		loginRate: newRateLimiter(),
 		pinRate:   newRateLimiter(),
 	}
@@ -196,7 +210,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r, s.cfg.TrustedProxyHops)
+	ip := s.clientIPIdentifier(r)
 	if !s.loginRate.Allow(ip, 5, time.Minute, s.clock()) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many login attempts")
 		return
@@ -571,7 +585,7 @@ func (s *Server) handlePIN(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	key := page.Slug + ":" + clientIP(r, s.cfg.TrustedProxyHops)
+	key := page.Slug + ":" + s.clientIPIdentifier(r)
 	if !s.pinRate.Allow(key, 10, time.Minute, s.clock()) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many PIN attempts")
 		return
@@ -668,7 +682,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		OriginalName:        storedName,
 		SizeBytes:           counting.count,
 		ContentType:         contentType,
-		UploaderIP:          clientIP(r, s.cfg.TrustedProxyHops),
+		UploaderIP:          s.clientIPIdentifier(r),
 		SubmissionID:        submissionID,
 		EncryptionMode:      encryptionMode,
 		EncryptionAlgorithm: encryptionAlgorithm,
@@ -1222,9 +1236,9 @@ func newRateLimiter() *rateLimiter {
 func (r *rateLimiter) Allow(key string, limit int, window time.Duration, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Without eviction the map grows unbounded as new keys (IPs, slug+IP pairs)
-	// arrive. Sweep at most once per window, dropping buckets whose window has
-	// already elapsed — those would be reset on next access anyway.
+	// Without eviction the map grows unbounded as new client identifiers arrive.
+	// Sweep at most once per window, dropping buckets whose window has already
+	// elapsed — those would be reset on next access anyway.
 	if now.Sub(r.lastSweep) >= window {
 		for k, b := range r.buckets {
 			if now.Sub(b.start) >= window {
@@ -1244,6 +1258,78 @@ func (r *rateLimiter) Allow(key string, limit int, window time.Duration, now tim
 	bucket.count++
 	r.buckets[key] = bucket
 	return true
+}
+
+const (
+	ipStoragePlain      = "plain"
+	ipStorageHMACSHA256 = "hmac-sha256"
+	ipDigestPrefix      = "ip-hmac-sha256:v1:"
+)
+
+type ipIdentifier struct {
+	mode   string
+	secret []byte
+}
+
+func newIPIdentifier(mode string, secret []byte) (ipIdentifier, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = ipStoragePlain
+	}
+	switch mode {
+	case ipStoragePlain:
+		return ipIdentifier{mode: mode}, nil
+	case ipStorageHMACSHA256:
+		if len(secret) < 32 {
+			return ipIdentifier{}, fmt.Errorf("IP hash secret must be at least 32 bytes")
+		}
+		return ipIdentifier{mode: mode, secret: append([]byte(nil), secret...)}, nil
+	default:
+		return ipIdentifier{}, fmt.Errorf("IP storage mode must be plain or hmac-sha256")
+	}
+}
+
+func (i ipIdentifier) Hashed() bool {
+	return i.mode == ipStorageHMACSHA256
+}
+
+func (i ipIdentifier) Stored(raw string) string {
+	normalized := canonicalIPIdentifierInput(raw)
+	if normalized == "" {
+		return ""
+	}
+	if !i.Hashed() {
+		return normalized
+	}
+	mac := hmac.New(sha256.New, i.secret)
+	_, _ = mac.Write([]byte(normalized))
+	return ipDigestPrefix + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (i ipIdentifier) RewriteStored(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, ipDigestPrefix) {
+		return raw
+	}
+	return i.Stored(raw)
+}
+
+func (s *Server) clientIPIdentifier(r *http.Request) string {
+	return s.ipIDs.Stored(clientIP(r, s.cfg.TrustedProxyHops))
+}
+
+func canonicalIPIdentifierInput(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		return addr.Unmap().String()
+	}
+	return strings.ToLower(raw)
 }
 
 // clientIP resolves the originating client address used for rate-limiting keys
