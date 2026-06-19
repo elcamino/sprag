@@ -2,7 +2,7 @@
 
 Thanks for considering a contribution. Sprag is intentionally narrow: one-way secure file intake for people who should not need an account, folder, listing, download path, or collaboration workspace.
 
-## Keep Sprag Tiny and Legible
+## Keep Sprag tiny and legible
 
 Good changes usually deepen one of these properties:
 
