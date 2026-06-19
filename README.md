@@ -12,6 +12,15 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 
 ---
 
+## Choose your path
+
+| I want to... | Start here |
+| --- | --- |
+| **Deploy Sprag** on my own machine, VPS, S3-compatible storage, or onion service | [Install and deploy](INSTALL.md) |
+| **Use it for sensitive intake** as a lawyer, journalist, HR/compliance team, doctor, researcher, or operator | [Read the product and security overview](https://sprag.org/professionals/) |
+| Check the exact security boundary before trusting browser E2E | [Security model](#security-model) |
+| Compare Sprag with file request links, portals, and whistleblower tools | [Comparison](https://sprag.org/compare/) |
+
 ## See Sprag in 30 seconds
 
 ![Sprag intake demo](assets/demo/sprag-intake-demo.gif)
@@ -20,8 +29,6 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 An admin creates an unguessable intake page, the uploader submits files without an account, and the admin receives one immutable submission envelope. The sender never gets a folder, listing, account, or download path.
 
 Sprag is named after a sprag clutch: it engages in one direction and freewheels in the other. The product has the same shape for files. Uploaders push files into an unguessable upload-page URL — they can never list, download, or even see what else has arrived. Only the authenticated admin can read what came in.
-
-It is **not** a file-sharing product. It is an **asymmetric, anonymous intake box**: the admin creates a capability URL, hands it out, and someone on the other side drops files in. That is the whole shape of the product, and everything else is built to keep that shape small and legible.
 
 With **server-blind E2E intake** enabled, the uploader's browser encrypts every file with **post-quantum hybrid cryptography** *before a single byte leaves the device*. The Go server and your S3 bucket only ever touch ciphertext. The admin decrypts client-side at download time. There is no plaintext for the server — or anyone who compromises it — to read.
 
@@ -46,6 +53,12 @@ For deployment recipes, see [INSTALL.md](INSTALL.md). It covers plaintext intake
 - **Bounded memory at any file size.** Uploads stream straight into an S3 multipart upload and downloads stream straight back out. A 5 GB file never lands on local disk or fills RAM.
 - **Optional onion-only ingress.** Sprag can run behind a Tor onion service with no public host ports, while keeping the product shape as one-way intake rather than a full whistleblower platform.
 
+## What Sprag is not
+
+Sprag is not a Dropbox, a client portal, a ticketing system, a chat tool, or a form builder. It does not give uploaders accounts, folders, listings, comments, or download links.
+
+That restraint is the product: a sender can push files in through a capability URL, then the path stops. The admin can review, decrypt, status, export evidence, and seal intake; the uploader cannot browse anything.
+
 ## How it works
 
 ```mermaid
@@ -68,7 +81,9 @@ sequenceDiagram
 
 Without E2E, Sprag is still a strict one-way intake box: streaming uploads to S3, unguessable slugs, optional PINs, and admin-only listing and download. E2E mode adds the server-blindness on top.
 
-## How it compares
+## Comparison notes
+
+The website has the buyer-facing comparison page; this README keeps the technical comparison compact for operators evaluating the source.
 
 Most "send me a file" tools are **outbound** sharing products retrofitted for inbound use, and their servers can read your files in normal operation. Sprag is built the other way around: inbound-only intake is the *only* thing it does, which is exactly why server blindness fits naturally instead of being bolted on.
 
@@ -90,8 +105,6 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 | WeTransfer | Outbound send, no account | No (proprietary, SaaS) | No (provider holds keys) | No | SaaS |
 
 **Tresorit** has publicly chosen the same ML-KEM-1024 hybrid design Sprag uses, but as of 2026 it is roadmap, not shipping, and not an anonymous-intake tool. **Internxt** genuinely ships some post-quantum encryption, but it is storage-only, Kyber-512 (NIST category 1, the lowest level), apparently not hybrid, and not confirmed for its Send product. **GlobaLeaks** runs live hybrid post-quantum TLS in transit but still stores submissions under classical encryption. The combination that is unique to Sprag is the intersection: one-way anonymous intake, no uploader account, client-side post-quantum E2E of the file, and a tiny self-hosted footprint.
-
-Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a form builder. There are no folders, no comment threads, no multi-tenant sharing permissions. That restraint is the moat.
 
 ## Features
 
@@ -133,6 +146,18 @@ Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 - **Downloads are always `Content-Disposition: attachment`**, never inline, so the bucket can't be used as an XSS host.
 - **Secrets are never logged.** Startup echoes a redacted config.
 
+## 60-second local start
+
+```bash
+cp .env.example .env
+openssl rand -base64 32   # put this in SESSION_SECRET
+docker compose run --build --rm sprag-app hash-password
+# put the printed hash in ADMIN_PASSWORD_HASH, then fill BASE_URL and S3_*
+docker compose up --build -d
+```
+
+For production recipes, E2E-required mode, and onion-only Tor ingress, use [INSTALL.md](INSTALL.md).
+
 ## Installation
 
 Use [INSTALL.md](INSTALL.md) for full setup instructions. It includes:
@@ -142,16 +167,6 @@ Use [INSTALL.md](INSTALL.md) for full setup instructions. It includes:
 - onion-only Tor deployment
 - local development and MinIO notes
 - backup, restore, and troubleshooting checklists
-
-Minimal Docker start:
-
-```bash
-cp .env.example .env
-openssl rand -base64 32   # put this in SESSION_SECRET
-docker compose run --build --rm sprag-app hash-password
-# put the printed hash in ADMIN_PASSWORD_HASH, then fill BASE_URL and S3_*
-docker compose up --build -d
-```
 
 For source-based setup, use `go run ./cmd/sprag hash-password` instead of the Docker hash command.
 
@@ -228,6 +243,12 @@ Metadata is stored in SQLite at `DB_PATH`. The database runs in WAL mode with a 
 go test ./...            # backend tests
 cd frontend && npm test  # frontend tests (Vitest), including the E2E crypto round-trip
 ```
+
+## Project Governance
+
+- Security reports: [SECURITY.md](SECURITY.md)
+- Contributions and scope rules: [CONTRIBUTING.md](CONTRIBUTING.md)
+- License: [GPL-3.0-or-later](LICENSE.md)
 
 ## License
 
