@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a scoped improvement to one-way secure intake
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sprag is intentionally narrow. Strong feature requests preserve one-way intake and avoid turning uploaders into users with accounts, folders, listings, or collaboration powers.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What sensitive-intake problem does this solve?
+      placeholder: A lawyer needs to collect...
+    validations:
+      required: true
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Primary audience
+      options:
+        - Self-hoster / operator
+        - Lawyer / legal team
+        - Journalist / newsroom
+        - HR / compliance
+        - Doctor / researcher
+        - Other professional intake
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest behavior change that solves the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: scope_check
+    attributes:
+      label: Scope check
+      description: Explain why this does not turn Sprag into file sharing, ticketing, chat, a form builder, or a general client portal.
+    validations:
+      required: true
+  - type: textarea
+    id: security_notes
+    attributes:
+      label: Security and privacy notes
+      description: Mention effects on uploader anonymity, metadata, E2E mode, receipts, logging, or admin access.
