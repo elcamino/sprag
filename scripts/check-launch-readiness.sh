@@ -28,6 +28,7 @@ require_file .github/PULL_REQUEST_TEMPLATE.md
 require_file docs/release-notes/v1.5.1.md
 require_file docs/launch/github-repo-settings.md
 require_file assets/demo/README.md
+require_file assets/demo/sprag-intake-demo.gif
 
 require_text README.md 'Deploy Sprag'
 require_text README.md 'Use it for sensitive intake'

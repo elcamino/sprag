@@ -24,7 +24,6 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 ## See Sprag in 30 seconds
 
 ![Sprag intake demo](assets/demo/sprag-intake-demo.gif)
-> Demo GIF to be recorded from a local fake-data deployment before public launch; storyboard lives in `assets/demo/README.md`.
 
 An admin creates an unguessable intake page, the uploader submits files without an account, and the admin receives one immutable submission envelope. The sender never gets a folder, listing, account, or download path.
 
