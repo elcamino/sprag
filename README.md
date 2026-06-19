@@ -16,7 +16,7 @@ It is **not** a file-sharing product. It is an **asymmetric, anonymous intake bo
 
 With **server-blind E2E intake** enabled, the uploader's browser encrypts every file with **post-quantum hybrid cryptography** *before a single byte leaves the device*. The Go server and your S3 bucket only ever touch ciphertext. The admin decrypts client-side at download time. There is no plaintext for the server — or anyone who compromises it — to read.
 
-> A SecureDrop-grade intake capability without SecureDrop's operational weight: no Tor, no hardened workstation, no multi-server deployment. Just one binary behind your existing reverse proxy.
+> A SecureDrop-adjacent intake capability without SecureDrop's operational weight: optional Tor onion ingress, but no hardened workstation, no source accounts, no air-gapped review workflow, and no multi-server deployment requirement.
 
 ## Who it's for
 
@@ -33,6 +33,7 @@ With **server-blind E2E intake** enabled, the uploader's browser encrypts every 
 - **Server-blind, post-quantum E2E.** Optional per-deployment, optional or required per-page. ML-KEM-1024 + P-384 hybrid KEM, HKDF-SHA-512, AES-256-GCM — encrypted in the browser before upload.
 - **Tiny and legible.** A single CGO-free Go binary with an embedded React frontend, one `.env`, one SQLite file, one S3 bucket. You can read the whole threat model in an afternoon.
 - **Bounded memory at any file size.** Uploads stream straight into an S3 multipart upload and downloads stream straight back out. A 5 GB file never lands on local disk or fills RAM.
+- **Optional onion-only ingress.** Sprag can run behind a Tor onion service with no public host ports, while keeping the product shape as one-way intake rather than a full whistleblower platform.
 
 ## How it works
 
@@ -97,8 +98,8 @@ Sprag deliberately does **not** try to be a Dropbox, a ticketing system, or a fo
 - **Unguessable capability URLs.** At least 24 chars, base62, cryptographically random.
 - **Admin password** hashed with bcrypt. Supply it as plaintext (`ADMIN_PASSWORD`) or — better — as a precomputed bcrypt hash (`ADMIN_PASSWORD_HASH`) so the plaintext never lives in your config. Passwords beyond bcrypt's 72-byte limit are handled via an internal SHA-256 prehash.
 - **IP metadata policy.** By default Sprag stores uploader IPs as plaintext for compatibility. Set `IP_STORAGE_MODE=hmac-sha256` and `IP_HASH_SECRET` to store deterministic keyed HMAC-SHA-256 identifiers instead; startup rewrites existing plaintext uploader IPs in SQLite to `ip-hmac-sha256:v1:<digest>`.
-- **Rate limiting.** Admin login 5/min/client identifier, PIN attempts 10/min per slug+client identifier, keyed on the real client IP or its HMAC identifier (see `TRUSTED_PROXY_HOPS`).
-- **Sessions.** Stateless HMAC-signed cookies, 7-day expiry, `HttpOnly` + `Secure` + `SameSite=Lax`.
+- **Rate limiting.** Admin login 5/min/client identifier, PIN attempts 10/min per slug+client identifier, keyed on the real client IP or its HMAC identifier (see `TRUSTED_PROXY_HOPS`). With `ANONYMOUS_INGRESS=true`, Sprag stores no uploader IP metadata and uses one global admin-login bucket plus page-scoped PIN buckets.
+- **Sessions.** Stateless HMAC-signed cookies, 7-day expiry, `HttpOnly` + `SameSite=Lax`. Cookies use the `Secure` attribute for HTTPS; `COOKIE_SECURE=auto` disables it only for localhost, loopback, and HTTP `.onion` origins where browsers would otherwise refuse to send the cookie.
 - **CSRF.** Admin mutations require the `X-Sprag-CSRF` custom header in addition to the same-site cookie.
 - **Streaming with hard caps.** The size limit is enforced by a counting reader while streaming; an oversized upload aborts the S3 multipart upload instead of trusting `Content-Length`. Files are never buffered whole in memory or on disk.
 - **Path-safe storage.** S3 keys use server-generated UUID paths (`S3_PREFIX/<slug>/<uuid>/<filename>`); the original filename is metadata only, so a malicious name can't traverse or collide.
@@ -136,7 +137,7 @@ go run ./cmd/sprag hash-password 'your-pw'  # or pass it as an argument
 
 Put the printed hash in `ADMIN_PASSWORD_HASH`. If both are set, the hash wins.
 
-Finally, fill in the S3 settings (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`) and set `BASE_URL` to the public URL the app is reached at. To turn on the post-quantum intake feature, set `E2E_INTAKE_ENABLED=true` (and optionally `E2E_INTAKE_REQUIRED=true` to reject any plaintext page or upload).
+Finally, fill in the S3 settings (`S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`) and set `BASE_URL` to the public URL the app is reached at. This may be an HTTPS clearnet URL or an HTTP `.onion` URL. To turn on the post-quantum intake feature, set `E2E_INTAKE_ENABLED=true` (and optionally `E2E_INTAKE_REQUIRED=true` to reject any plaintext page or upload).
 
 ### Option A: Docker Compose (recommended)
 
@@ -180,7 +181,35 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o sprag ./cmd/sprag
 
 The build is CGO-free (pure-Go SQLite driver), so cross-compilation and single-binary distribution are trivial.
 
-### Option C: Behind an existing shared Caddy
+### Option C: Onion-only Tor service
+
+Use `docker-compose.tor.yml` when Sprag should be reachable only through a Tor onion service. This path does not publish Caddy or app ports on the host.
+
+Start with a temporary onion `BASE_URL`, then let Tor generate the real hostname:
+
+```env
+BASE_URL=http://replace-after-first-start.onion
+TRUSTED_PROXY_HOPS=0
+ANONYMOUS_INGRESS=true
+COOKIE_SECURE=auto
+```
+
+Bring up the onion stack:
+
+```bash
+docker compose -f docker-compose.tor.yml up --build -d
+docker compose -f docker-compose.tor.yml exec tor cat /var/lib/tor/sprag/hostname
+```
+
+Put the printed hostname into `.env` as `BASE_URL=http://<hostname>.onion`, then recreate the app container:
+
+```bash
+docker compose -f docker-compose.tor.yml up -d --force-recreate sprag-app
+```
+
+See [docs/tor.md](docs/tor.md) for the threat model, hidden-service key handling, and smoke-test checklist.
+
+### Option D: Behind an existing shared Caddy
 
 If you already run a shared Caddy on an external network, drop the bundled `caddy` service and attach the app to that network instead. Keep the unique service name `sprag-app` to avoid a DNS-alias collision with another project's container, and add a block to your existing Caddyfile:
 
@@ -207,6 +236,7 @@ Sprag loads `.env` if present and then reads environment variables. Startup fail
 |---|:---:|---|---|
 | `PORT` | | `8080` | Listen port. |
 | `BASE_URL` | Yes | | Used to build shareable `/u/<slug>` URLs. |
+| `COOKIE_SECURE` | | `auto` | Cookie `Secure` attribute policy: `auto`, `true`, or `false`. `auto` uses secure cookies for HTTPS and non-secure cookies only for localhost, loopback, and HTTP `.onion` origins. |
 | `SESSION_SECRET` | Yes | | Base64; must decode to at least 32 bytes. Rotating it invalidates all sessions. |
 | `ADMIN_USERNAME` | | `admin` | |
 | `ADMIN_PASSWORD` | Yes* | | Plaintext, bcrypt-hashed in memory at boot. |
@@ -216,6 +246,7 @@ Sprag loads `.env` if present and then reads environment variables. Startup fail
 | `MAX_FILE_SIZE` | | `5368709120` (5 GiB) | Global default; per-page limits may only lower it. |
 | `ALLOWED_EXT` | | *(any)* | Comma list, e.g. `pdf,png,zip`. A hard ceiling per-page lists may narrow but not widen. |
 | `TRUSTED_PROXY_HOPS` | | `1` | Number of trusted proxies appending to `X-Forwarded-For`. `0` = directly exposed. |
+| `ANONYMOUS_INGRESS` | | `false` | Set `true` for Tor/onion ingress. Sprag stores no uploader IP and uses global/page-scoped abuse buckets instead of apparent per-IP buckets. |
 | `DB_PATH` | | `/data/sprag.db` | SQLite path (WAL mode; back up the whole directory). |
 | `S3_ENDPOINT` | Yes | | S3-compatible endpoint. |
 | `S3_REGION` | Yes | | |
@@ -261,7 +292,7 @@ Metadata is stored in SQLite at `DB_PATH`. The database runs in WAL mode with a 
 - **Backend:** Go (stdlib `net/http` + `chi`), pure-Go SQLite (`modernc.org/sqlite`, CGO-free), AWS SDK v2 for any S3-compatible endpoint, `log/slog` JSON logging.
 - **Frontend:** React + TypeScript + Vite + Tailwind CSS, built to `frontend/dist/` and embedded into the binary.
 - **Crypto:** bcrypt for passwords/PINs; `@noble/post-quantum` (ML-KEM-1024) + WebCrypto (P-384 ECDH, HKDF-SHA-512, AES-256-GCM) for E2E; memory-hard Argon2id (`@noble/hashes`) for the optional in-browser private-key store.
-- **Deployment:** multi-stage Dockerfile to `gcr.io/distroless/static`, `docker-compose.yml` with Caddy for automatic HTTPS.
+- **Deployment:** multi-stage Dockerfile to `gcr.io/distroless/static`, `docker-compose.yml` with Caddy for automatic HTTPS, and `docker-compose.tor.yml` for onion-only Tor ingress.
 
 ## Development
 

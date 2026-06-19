@@ -19,6 +19,7 @@ package httpapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -56,5 +57,61 @@ func TestLoginRateLimitSurvivesForwardedForSpoofing(t *testing.T) {
 	}
 	if code := attempt("6.6.6.6"); code != http.StatusTooManyRequests {
 		t.Fatalf("sixth attempt = %d, want 429 (spoofed prefix must not bypass the limit)", code)
+	}
+}
+
+func TestAnonymousIngressLoginRateLimitIsGlobal(t *testing.T) {
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.AnonymousIngress = true
+	})
+
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "wrong-password"})
+	attempt := func(remoteAddr string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/login", bytes.NewReader(body))
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	for i := 0; i < 5; i++ {
+		remote := fmt.Sprintf("198.51.100.%d:1234", i+1)
+		if code := attempt(remote); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, code)
+		}
+	}
+	if code := attempt("203.0.113.9:1234"); code != http.StatusTooManyRequests {
+		t.Fatalf("sixth attempt from a different apparent peer = %d, want 429", code)
+	}
+}
+
+func TestAnonymousIngressPINRateLimitIsPageScoped(t *testing.T) {
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.AnonymousIngress = true
+	})
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{
+		"title": "Anonymous PIN page",
+		"pin":   "2468",
+	})
+
+	attempt := func(remoteAddr string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/u/"+slug+"/pin", bytes.NewReader([]byte(`{"pin":"wrong"}`)))
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	for i := 0; i < 10; i++ {
+		remote := fmt.Sprintf("198.51.100.%d:1234", i+1)
+		if code := attempt(remote); code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, code)
+		}
+	}
+	if code := attempt("203.0.113.9:1234"); code != http.StatusTooManyRequests {
+		t.Fatalf("eleventh attempt from a different apparent peer = %d, want 429", code)
 	}
 }

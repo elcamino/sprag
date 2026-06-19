@@ -714,6 +714,37 @@ func TestUploadStoresHMACIPIdentifierWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAnonymousIngressDoesNotStoreUploaderIP(t *testing.T) {
+	handler, _ := newTestHandlerWithConfig(t, func(c *httpapi.Config) {
+		c.AnonymousIngress = true
+	})
+	session := loginAdmin(t, handler)
+	slug := createPageSlug(t, handler, session, map[string]any{"title": "Anonymous intake"})
+
+	upload := performMultipart(t, handler, "/api/u/"+slug, "file", "anonymous.txt", []byte("hello"), nil)
+	if upload.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", upload.Code, upload.Body.String())
+	}
+
+	files := perform(t, handler, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+	if files.Code != http.StatusOK {
+		t.Fatalf("files status = %d body=%s", files.Code, files.Body.String())
+	}
+	if strings.Contains(files.Body.String(), "uploader_ip") || strings.Contains(files.Body.String(), "192.0.2.1") {
+		t.Fatalf("anonymous ingress leaked uploader IP metadata: %s", files.Body.String())
+	}
+	var listed []struct {
+		UploaderIP string `json:"uploader_ip"`
+	}
+	decodeJSON(t, files.Body.Bytes(), &listed)
+	if len(listed) != 1 {
+		t.Fatalf("expected one listed file, got %d", len(listed))
+	}
+	if listed[0].UploaderIP != "" {
+		t.Fatalf("uploader_ip = %q, want empty under anonymous ingress", listed[0].UploaderIP)
+	}
+}
+
 func TestNewRewritesExistingUploaderIPsWhenHMACStorageConfigured(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))

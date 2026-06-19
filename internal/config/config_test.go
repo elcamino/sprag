@@ -102,6 +102,111 @@ func TestLoadFromLookupParsesTrustedProxyHops(t *testing.T) {
 	}
 }
 
+func TestLoadFromLookupParsesAnonymousIngress(t *testing.T) {
+	values := baseValues()
+	values["ANONYMOUS_INGRESS"] = "true"
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if !cfg.AnonymousIngress {
+		t.Fatal("expected AnonymousIngress to be enabled")
+	}
+}
+
+func TestLoadFromLookupRejectsInvalidAnonymousIngress(t *testing.T) {
+	values := baseValues()
+	values["ANONYMOUS_INGRESS"] = "maybe"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected invalid ANONYMOUS_INGRESS to fail")
+	}
+	if !strings.Contains(err.Error(), "ANONYMOUS_INGRESS") {
+		t.Fatalf("expected ANONYMOUS_INGRESS error, got %q", err.Error())
+	}
+}
+
+func TestLoadFromLookupUsesSecureCookiesForHTTPSBaseURL(t *testing.T) {
+	cfg, err := config.LoadFromLookup(lookupFrom(baseValues()))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if !cfg.SecureCookies {
+		t.Fatal("expected HTTPS base URL to use secure cookies")
+	}
+}
+
+func TestLoadFromLookupAllowsHTTPOnionBaseURLWithInsecureCookies(t *testing.T) {
+	values := baseValues()
+	values["BASE_URL"] = "http://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd.onion/"
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if cfg.BaseURL != "http://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd.onion" {
+		t.Fatalf("unexpected trimmed BaseURL %q", cfg.BaseURL)
+	}
+	if cfg.SecureCookies {
+		t.Fatal("expected HTTP onion base URL to use non-secure cookies")
+	}
+}
+
+func TestLoadFromLookupAllowsHTTPLocalhostBaseURLWithInsecureCookies(t *testing.T) {
+	values := baseValues()
+	values["BASE_URL"] = "http://localhost:8080"
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if cfg.SecureCookies {
+		t.Fatal("expected HTTP localhost base URL to use non-secure cookies")
+	}
+}
+
+func TestLoadFromLookupRejectsPlainHTTPPublicBaseURLInAutoCookieMode(t *testing.T) {
+	values := baseValues()
+	values["BASE_URL"] = "http://sprag.example.test"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected plain HTTP public base URL to fail")
+	}
+	if !strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("expected COOKIE_SECURE error, got %q", err.Error())
+	}
+}
+
+func TestLoadFromLookupHonorsExplicitCookieSecureFalse(t *testing.T) {
+	values := baseValues()
+	values["BASE_URL"] = "http://sprag.example.test"
+	values["COOKIE_SECURE"] = "false"
+
+	cfg, err := config.LoadFromLookup(lookupFrom(values))
+	if err != nil {
+		t.Fatalf("LoadFromLookup failed: %v", err)
+	}
+	if cfg.SecureCookies {
+		t.Fatal("expected explicit COOKIE_SECURE=false to disable secure cookies")
+	}
+}
+
+func TestLoadFromLookupRejectsUnsupportedCookieSecureMode(t *testing.T) {
+	values := baseValues()
+	values["COOKIE_SECURE"] = "sometimes"
+
+	_, err := config.LoadFromLookup(lookupFrom(values))
+	if err == nil {
+		t.Fatal("expected unsupported COOKIE_SECURE value to fail")
+	}
+	if !strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("expected COOKIE_SECURE error, got %q", err.Error())
+	}
+}
+
 func TestLoadFromLookupParsesHMACIPStorage(t *testing.T) {
 	values := baseValues()
 	values["IP_STORAGE_MODE"] = "hmac-sha256"

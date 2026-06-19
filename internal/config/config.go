@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -44,6 +46,8 @@ type Config struct {
 	AllowedExtensions []string  `json:"allowed_ext,omitempty"`
 	DBPath            string    `json:"db_path"`
 	TrustedProxyHops  int       `json:"trusted_proxy_hops"`
+	SecureCookies     bool      `json:"secure_cookies"`
+	AnonymousIngress  bool      `json:"anonymous_ingress"`
 	E2EIntake         E2EConfig `json:"e2e_intake"`
 	S3                S3Config  `json:"s3"`
 }
@@ -130,6 +134,24 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 	}
 	cfg.TrustedProxyHops = hops
 
+	anonymousIngress, err := strconv.ParseBool(get("ANONYMOUS_INGRESS", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("ANONYMOUS_INGRESS must be a boolean")
+	}
+	cfg.AnonymousIngress = anonymousIngress
+
+	cookieSecureMode := strings.ToLower(get("COOKIE_SECURE", "auto"))
+	if cookieSecureMode == "" {
+		cookieSecureMode = "auto"
+	}
+	if cfg.BaseURL != "" {
+		secureCookies, err := resolveSecureCookies(cookieSecureMode, cfg.BaseURL)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.SecureCookies = secureCookies
+	}
+
 	ipStorageMode := strings.ToLower(get("IP_STORAGE_MODE", "plain"))
 	switch ipStorageMode {
 	case "plain":
@@ -190,6 +212,46 @@ func LoadFromLookup(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("missing or invalid required config: %s", strings.Join(missing, ", "))
 	}
 	return cfg, nil
+}
+
+func resolveSecureCookies(mode, baseURL string) (bool, error) {
+	switch mode {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	case "auto":
+		return autoSecureCookies(baseURL)
+	default:
+		return false, fmt.Errorf("COOKIE_SECURE must be auto, true, or false")
+	}
+}
+
+func autoSecureCookies(baseURL string) (bool, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false, fmt.Errorf("BASE_URL must be an absolute http or https URL")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true, nil
+	case "http":
+		if isTrustedInsecureCookieHost(parsed.Hostname()) {
+			return false, nil
+		}
+		return false, fmt.Errorf("COOKIE_SECURE=auto refuses plain HTTP BASE_URL %q; use HTTPS, localhost, .onion, or set COOKIE_SECURE=false explicitly", baseURL)
+	default:
+		return false, fmt.Errorf("BASE_URL must use http or https")
+	}
+}
+
+func isTrustedInsecureCookieHost(host string) bool {
+	normalized := strings.TrimSuffix(strings.ToLower(host), ".")
+	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") || strings.HasSuffix(normalized, ".onion") {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (c Config) Redacted() string {

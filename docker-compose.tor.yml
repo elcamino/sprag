@@ -1,0 +1,33 @@
+services:
+  sprag-app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ANONYMOUS_INGRESS: "true"
+      COOKIE_SECURE: auto
+      PORT: "8080"
+      TRUSTED_PROXY_HOPS: "0"
+      BASE_URL: "http://2dgpnpqprcvdvsr6ukh2kbgktpileoq3ui2owlo7xent3qvbnhpxneqd.onion"
+    volumes:
+      - sprag-data:/data
+    networks:
+      - sprag-net
+
+  tor:
+    build:
+      context: ./deploy/tor
+    restart: unless-stopped
+    depends_on:
+      - sprag-app
+    volumes:
+      - tor-hidden-service:/var/lib/tor/sprag
+    networks:
+      - sprag-net
+
+volumes:
+  sprag-data:
+  tor-hidden-service:
+
+networks:
+  sprag-net:

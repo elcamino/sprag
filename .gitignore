@@ -13,3 +13,4 @@
 *.sprag
 *.zener
 key.json
+/run.sh

@@ -1,0 +1,7 @@
+User debian-tor
+DataDirectory /var/lib/tor
+SocksPort 0
+
+HiddenServiceDir /var/lib/tor/sprag
+HiddenServiceVersion 3
+HiddenServicePort 80 sprag-app:8080

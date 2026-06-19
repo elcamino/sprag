@@ -118,27 +118,9 @@ func run(logger *slog.Logger) error {
 	handler, err := httpapi.New(httpapi.Dependencies{
 		Store:     db,
 		BlobStore: objects,
-		Config: httpapi.Config{
-			BaseURL:           cfg.BaseURL,
-			SessionSecret:     cfg.SessionSecret,
-			AdminUsername:     cfg.AdminUsername,
-			AdminPassword:     cfg.AdminPassword,
-			AdminPasswordHash: cfg.AdminPasswordHash,
-			IPStorageMode:     cfg.IPStorageMode,
-			IPHashSecret:      cfg.IPHashSecret,
-			MaxFileSize:       cfg.MaxFileSize,
-			AllowedExtensions: cfg.AllowedExtensions,
-			S3Prefix:          cfg.S3.Prefix,
-			SecureCookies:     true,
-			TrustedProxyHops:  cfg.TrustedProxyHops,
-			E2EIntake: httpapi.E2EConfig{
-				Enabled:   cfg.E2EIntake.Enabled,
-				Required:  cfg.E2EIntake.Required,
-				Algorithm: cfg.E2EIntake.Algorithm,
-			},
-		},
-		Logger:   logger,
-		StaticFS: httpapi.FS(frontend),
+		Config:    newHTTPConfig(cfg),
+		Logger:    logger,
+		StaticFS:  httpapi.FS(frontend),
 	})
 	if err != nil {
 		return err
@@ -165,5 +147,28 @@ func run(logger *slog.Logger) error {
 			return nil
 		}
 		return err
+	}
+}
+
+func newHTTPConfig(cfg config.Config) httpapi.Config {
+	return httpapi.Config{
+		BaseURL:           cfg.BaseURL,
+		SessionSecret:     cfg.SessionSecret,
+		AdminUsername:     cfg.AdminUsername,
+		AdminPassword:     cfg.AdminPassword,
+		AdminPasswordHash: cfg.AdminPasswordHash,
+		IPStorageMode:     cfg.IPStorageMode,
+		IPHashSecret:      cfg.IPHashSecret,
+		MaxFileSize:       cfg.MaxFileSize,
+		AllowedExtensions: cfg.AllowedExtensions,
+		S3Prefix:          cfg.S3.Prefix,
+		SecureCookies:     cfg.SecureCookies,
+		TrustedProxyHops:  cfg.TrustedProxyHops,
+		AnonymousIngress:  cfg.AnonymousIngress,
+		E2EIntake: httpapi.E2EConfig{
+			Enabled:   cfg.E2EIntake.Enabled,
+			Required:  cfg.E2EIntake.Required,
+			Algorithm: cfg.E2EIntake.Algorithm,
+		},
 	}
 }

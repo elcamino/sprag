@@ -74,6 +74,7 @@ type Config struct {
 	S3Prefix          string
 	SecureCookies     bool
 	TrustedProxyHops  int
+	AnonymousIngress  bool
 	E2EIntake         E2EConfig
 }
 
@@ -214,8 +215,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := s.clientIPIdentifier(r)
-	if !s.loginRate.Allow(ip, 5, time.Minute, s.clock()) {
+	if !s.loginRate.Allow(s.loginRateKey(r), 5, time.Minute, s.clock()) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many login attempts")
 		return
 	}
@@ -772,8 +772,7 @@ func (s *Server) handlePIN(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	key := page.Slug + ":" + s.clientIPIdentifier(r)
-	if !s.pinRate.Allow(key, 10, time.Minute, s.clock()) {
+	if !s.pinRate.Allow(s.pinRateKey(page.Slug, r), 10, time.Minute, s.clock()) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many PIN attempts")
 		return
 	}
@@ -871,7 +870,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		OriginalName:        storedName,
 		SizeBytes:           counting.count,
 		ContentType:         contentType,
-		UploaderIP:          s.clientIPIdentifier(r),
+		UploaderIP:          s.uploaderIdentifier(r),
 		SubmissionID:        submissionID,
 		EncryptionMode:      encryptionMode,
 		EncryptionAlgorithm: encryptionAlgorithm,
@@ -1687,6 +1686,27 @@ func (i ipIdentifier) RewriteStored(raw string) string {
 
 func (s *Server) clientIPIdentifier(r *http.Request) string {
 	return s.ipIDs.Stored(clientIP(r, s.cfg.TrustedProxyHops))
+}
+
+func (s *Server) loginRateKey(r *http.Request) string {
+	if s.cfg.AnonymousIngress {
+		return "anonymous-ingress:admin-login"
+	}
+	return "ip:" + s.clientIPIdentifier(r)
+}
+
+func (s *Server) pinRateKey(slug string, r *http.Request) string {
+	if s.cfg.AnonymousIngress {
+		return "anonymous-ingress:pin:" + slug
+	}
+	return "pin:" + slug + ":" + s.clientIPIdentifier(r)
+}
+
+func (s *Server) uploaderIdentifier(r *http.Request) string {
+	if s.cfg.AnonymousIngress {
+		return ""
+	}
+	return s.clientIPIdentifier(r)
 }
 
 func canonicalIPIdentifierInput(raw string) string {
