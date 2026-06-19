@@ -1,5 +1,5 @@
 /sprag
-/zener
+/docs/
 /data/
 /frontend/node_modules/
 /frontend/dist/
@@ -11,6 +11,5 @@
 *.db
 .DS_Store
 *.sprag
-*.zener
 key.json
 /run.sh

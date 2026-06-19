@@ -42,7 +42,7 @@ scripts/check-launch-readiness.sh
 Before opening a pull request:
 
 - keep the change focused on one problem
-- update `README.md`, `INSTALL.md`, `docs/features.md`, or `docs/sprag-prd.md` when behavior or guarantees change
+- update `README.md` and `INSTALL.md` when behavior or guarantees change
 - keep security wording threat-model accurate
 - add or update tests for behavior changes
 - run the relevant Go and frontend tests

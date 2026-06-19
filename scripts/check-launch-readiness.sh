@@ -25,8 +25,6 @@ require_file CONTRIBUTING.md
 require_file .github/ISSUE_TEMPLATE/bug_report.yml
 require_file .github/ISSUE_TEMPLATE/feature_request.yml
 require_file .github/PULL_REQUEST_TEMPLATE.md
-require_file docs/release-notes/v1.5.1.md
-require_file docs/launch/github-repo-settings.md
 require_file assets/demo/README.md
 require_file assets/demo/sprag-intake-demo.gif
 
@@ -40,8 +38,6 @@ require_text README.md 'CONTRIBUTING.md'
 require_text SECURITY.md 'security@sprag.org'
 require_text SECURITY.md 'Browser-delivered cryptography boundary'
 require_text CONTRIBUTING.md 'Keep Sprag tiny and legible'
-require_text docs/release-notes/v1.5.1.md 'Sprag v1.5.1'
-require_text docs/launch/github-repo-settings.md 'secure-document-intake'
 require_text assets/demo/README.md 'admin creates an intake page'
 
 printf 'launch-readiness check passed\n'

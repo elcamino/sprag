@@ -12,15 +12,6 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 
 ---
 
-## Choose your path
-
-| I want to... | Start here |
-| --- | --- |
-| **Deploy Sprag** on my own machine, VPS, S3-compatible storage, or onion service | [Install and deploy](INSTALL.md) |
-| **Use it for sensitive intake** as a lawyer, journalist, HR/compliance team, doctor, researcher, or operator | [Read the product and security overview](https://sprag.org/professionals/) |
-| Check the exact security boundary before trusting browser E2E | [Security model](#security-model) |
-| Compare Sprag with file request links, portals, and whistleblower tools | [Comparison](https://sprag.org/compare/) |
-
 ## See Sprag in 30 seconds
 
 ![Sprag intake demo](assets/demo/sprag-intake-demo.gif)
@@ -34,6 +25,15 @@ With **server-blind E2E intake** enabled, the uploader's browser encrypts every 
 > A SecureDrop-adjacent intake capability without SecureDrop's operational weight: optional Tor onion ingress, but no hardened workstation, no source accounts, no air-gapped review workflow, and no multi-server deployment requirement.
 
 For deployment recipes, see [INSTALL.md](INSTALL.md). It covers plaintext intake, server-blind E2E intake, and onion-only Tor deployment.
+
+## Choose your path
+
+| I want to... | Start here |
+| --- | --- |
+| **Deploy Sprag** on my own machine, VPS, S3-compatible storage, or onion service | [Install and deploy](INSTALL.md) |
+| **Use it for sensitive intake** as a lawyer, journalist, HR/compliance team, doctor, researcher, or operator | [Read the product and security overview](https://sprag.org/professionals/) |
+| Check the exact security boundary before trusting browser E2E | [Security model](#security-model) |
+| Compare Sprag with file request links, portals, and whistleblower tools | [Comparison](https://sprag.org/compare/) |
 
 ## Who it's for
 
@@ -115,8 +115,8 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 - **Admin dashboard** — create/edit/delete pages, list uploads grouped by submission, update file status, download a single file, or download a plaintext page as a streamed `.zip`.
 - **QR codes and copy buttons** for sharing capability URLs.
 - **Server-blind post-quantum E2E intake** (see below).
-- **Chain-of-custody manifests** — export page metadata, submission IDs, stored-object SHA-512 hashes, upload/download timestamps, and handling events as JSON.
-- **Legal hold / sealed mode** — seal a page after intake closes; later administrative actions remain possible but are recorded as post-seal events.
+- **Chain-of-custody manifests** — export page metadata, submission IDs, stored-object SHA-512 hashes, upload/download timestamps, and handling events as JSON. These are integrity and handling records, not legal certification: the hashes and logs document what Sprag observed, they do not by themselves establish admissibility.
+- **Legal hold / sealed mode** — seal a page after intake closes; later administrative actions remain possible but are recorded as post-seal events. This is tamper-evident handling, not cryptographic immutability.
 - **Metadata-minimized ingress** — store plaintext uploader IPs, deterministic HMAC identifiers, or no uploader IP at all for anonymous ingress such as Tor.
 - **Onion-only Tor deployment** — publish Sprag as a v3 onion service with no host-published app or Caddy ports.
 - **Single static binary** with the frontend embedded via `embed.FS`. Pure-Go SQLite means CGO-free builds and trivial cross-compilation.
@@ -128,7 +128,7 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 3. **Receive submissions.** Uploads are grouped into immutable submission envelopes and can include a sender receipt URL.
 4. **Track file status.** The admin can mark a submission received, reviewed, rejected, or downloaded. The public receipt page shows only that status and aggregate file counts/bytes.
 5. **Download or decrypt.** Plaintext pages support direct download and streamed ZIP export. E2E pages download ciphertext and decrypt in the admin browser with the page private key.
-6. **Export evidence.** Chain-of-custody manifests include stored-object SHA-512 hashes and handling events. In E2E mode the server-side hash is a ciphertext-object hash.
+6. **Export evidence.** Chain-of-custody manifests include stored-object SHA-512 hashes and handling events. In E2E mode the server-side hash is a ciphertext-object hash. Treat these manifests as integrity and handling records, not as legal certification or proof of court admissibility.
 7. **Seal when intake closes.** Sealing a page closes public intake, prevents reopening or page deletion, and marks later handling as post-seal activity.
 
 ## Security model
