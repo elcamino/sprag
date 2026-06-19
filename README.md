@@ -12,6 +12,13 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 
 ---
 
+## See Sprag in 30 seconds
+
+![Sprag intake demo](assets/demo/sprag-intake-demo.gif)
+> Demo GIF to be recorded from a local fake-data deployment before public launch; storyboard lives in `assets/demo/README.md`.
+
+An admin creates an unguessable intake page, the uploader submits files without an account, and the admin receives one immutable submission envelope. The sender never gets a folder, listing, account, or download path.
+
 Sprag is named after a sprag clutch: it engages in one direction and freewheels in the other. The product has the same shape for files. Uploaders push files into an unguessable upload-page URL — they can never list, download, or even see what else has arrived. Only the authenticated admin can read what came in.
 
 It is **not** a file-sharing product. It is an **asymmetric, anonymous intake box**: the admin creates a capability URL, hands it out, and someone on the other side drops files in. That is the whole shape of the product, and everything else is built to keep that shape small and legible.
