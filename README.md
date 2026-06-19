@@ -7,6 +7,8 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 [![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)](go.mod)
 [![Single binary](https://img.shields.io/badge/deploy-single%20binary-brightgreen.svg)](INSTALL.md)
 [![E2E: ML-KEM-1024 hybrid](https://img.shields.io/badge/E2E-ML--KEM--1024%20%2B%20P--384-6f42c1.svg)](#server-blind-post-quantum-e2e-intake)
+[![Tor](https://img.shields.io/badge/Tor-onion--only-7D4698.svg)](INSTALL.md#mode-3-onion-only-tor-service)
+[![Evidence](https://img.shields.io/badge/evidence-chain--of--custody-444444.svg)](#admin-workflows)
 
 ---
 
