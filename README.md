@@ -173,6 +173,20 @@ docker run -d --name sprag -p 8080:8080 \
 
 Running the server needs `BASE_URL`, `SESSION_SECRET`, the `S3_*` values, and one of `ADMIN_PASSWORD` / `ADMIN_PASSWORD_HASH` in your `.env` (see [Configuration](#configuration)). Pin a version like `ghcr.io/elcamino/sprag:1.6` for reproducible deploys. To use the image with Docker Compose, set `image: ghcr.io/elcamino/sprag:latest` on the `sprag-app` service and drop `build: .`.
 
+## Prebuilt binaries
+
+Every release also ships standalone binaries (no runtime dependencies, frontend embedded) for Linux, macOS, and FreeBSD on amd64/arm64/arm. Download one from the [Releases page](https://github.com/elcamino/sprag/releases) and run it:
+
+```bash
+# optional: verify the download against the release checksums
+sha256sum --ignore-missing -c SHA256SUMS
+
+tar xzf sprag_v1.6.1_linux_amd64.tar.gz
+./sprag_v1.6.1_linux_amd64/sprag   # loads a .env in the current directory if present
+```
+
+The server still needs `BASE_URL`, `SESSION_SECRET`, the `S3_*` values, and an admin password (see [Configuration](#configuration)).
+
 ## Installation
 
 Use [INSTALL.md](INSTALL.md) for full setup instructions. It includes:
