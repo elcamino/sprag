@@ -157,6 +157,22 @@ docker compose up --build -d
 
 For production recipes, E2E-required mode, and onion-only Tor ingress, use [INSTALL.md](INSTALL.md).
 
+## Run from the prebuilt image
+
+Prebuilt multi-arch images (amd64 + arm64) are published to the GitHub Container Registry on every release.
+
+```bash
+# Print a bcrypt admin-password hash (needs no config):
+docker run --rm ghcr.io/elcamino/sprag:latest hash-password 'your-admin-password'
+
+# Run the server (same config as the 60-second start; no reverse proxy):
+docker run -d --name sprag -p 8080:8080 \
+  --env-file .env -v sprag-data:/data \
+  ghcr.io/elcamino/sprag:latest
+```
+
+Running the server needs `BASE_URL`, `SESSION_SECRET`, the `S3_*` values, and one of `ADMIN_PASSWORD` / `ADMIN_PASSWORD_HASH` in your `.env` (see [Configuration](#configuration)). Pin a version like `ghcr.io/elcamino/sprag:1.6` for reproducible deploys. To use the image with Docker Compose, set `image: ghcr.io/elcamino/sprag:latest` on the `sprag-app` service and drop `build: .`.
+
 ## Installation
 
 Use [INSTALL.md](INSTALL.md) for full setup instructions. It includes:

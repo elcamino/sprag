@@ -1,0 +1,31 @@
+# VCS / CI / editor
+.git
+.github
+.gitignore
+.DS_Store
+
+# Secrets and local state - must never enter build layers
+.env
+.env.*
+key.json
+*.db
+*.db-wal
+*.db-shm
+data/
+tor-hidden-service/
+
+# Local-only docs/planning (gitignored)
+docs/
+
+# Regenerated inside the image by the frontend build stage
+frontend/node_modules
+frontend/dist
+
+# Not needed to build the app binary
+deploy/
+assets/
+run.sh
+*.sprag
+*.zener
+.superpowers/
+.playwright-mcp/
