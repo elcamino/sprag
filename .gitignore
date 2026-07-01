@@ -13,3 +13,4 @@
 *.sprag
 key.json
 /run.sh
+/assets/demo/*.png

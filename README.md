@@ -12,9 +12,15 @@ One Go binary. Anonymous uploads. Post-quantum end-to-end encryption. Nothing fl
 
 ---
 
-## See Sprag in 30 seconds
+## See Sprag
 
-![Sprag intake demo](assets/demo/sprag-intake-demo.gif)
+**The uploader's view** — submit files into an unguessable page. No account, no folder, no listing, no download path. With server-blind E2E on, the browser encrypts every file before a byte leaves the device.
+
+![Sprag uploader view — submitting files to an intake page](assets/demo/sprag-upload.webp)
+
+**The admin dashboard** — create intake pages, then review, decrypt, status, seal, and export evidence for what arrives. Only the authenticated admin can read what came in.
+
+![Sprag admin dashboard — reviewing submissions on an intake page](assets/demo/sprag-admin.webp)
 
 An admin creates an unguessable intake page, the uploader submits files without an account, and the admin receives one immutable submission envelope. The sender never gets a folder, listing, account, or download path.
 
