@@ -17,5 +17,4 @@
 
 - [ ] `go test ./...`
 - [ ] `cd frontend && npm test`
-- [ ] `scripts/check-launch-readiness.sh`
 - [ ] Documentation updated when behavior or guarantees changed.

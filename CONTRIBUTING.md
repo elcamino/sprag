@@ -31,12 +31,6 @@ cd frontend
 npm test
 ```
 
-Run the launch-readiness documentation check from the repository root:
-
-```bash
-scripts/check-launch-readiness.sh
-```
-
 ## Pull Request Checklist
 
 Before opening a pull request:
