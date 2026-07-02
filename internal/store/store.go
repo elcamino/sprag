@@ -530,7 +530,19 @@ WHERE id = ?`, id)
 	return s.GetPage(ctx, id)
 }
 
+// dbtx abstracts *sql.DB and *sql.Tx so multi-statement operations can run all
+// their writes inside one transaction while single-statement callers keep
+// using the pool directly.
+type dbtx interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func (s *SQLite) EnsureSubmissionEnvelope(ctx context.Context, in SubmissionEnvelopeCreate) (SubmissionEnvelope, error) {
+	return ensureSubmissionEnvelope(ctx, s.db, in)
+}
+
+func ensureSubmissionEnvelope(ctx context.Context, q dbtx, in SubmissionEnvelopeCreate) (SubmissionEnvelope, error) {
 	if in.PageID == 0 {
 		return SubmissionEnvelope{}, fmt.Errorf("page id is required")
 	}
@@ -542,7 +554,7 @@ func (s *SQLite) EnsureSubmissionEnvelope(ctx context.Context, in SubmissionEnve
 		if err != nil {
 			return SubmissionEnvelope{}, err
 		}
-		_, err = s.db.ExecContext(ctx, `
+		_, err = q.ExecContext(ctx, `
 INSERT INTO submission_envelopes (page_id, public_id, uploader_ip, receipt_token, receipt_status, receipt_status_updated_at)
 VALUES (?, ?, nullif(?, ''), ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 ON CONFLICT(page_id, public_id) DO NOTHING`,
@@ -553,7 +565,7 @@ ON CONFLICT(page_id, public_id) DO NOTHING`,
 		if err != nil {
 			return SubmissionEnvelope{}, err
 		}
-		envelope, err := s.GetSubmissionEnvelope(ctx, in.PageID, in.PublicID)
+		envelope, err := getSubmissionEnvelope(ctx, q, in.PageID, in.PublicID)
 		if err == nil {
 			return envelope, nil
 		}
@@ -565,7 +577,11 @@ ON CONFLICT(page_id, public_id) DO NOTHING`,
 }
 
 func (s *SQLite) GetSubmissionEnvelope(ctx context.Context, pageID int64, publicID string) (SubmissionEnvelope, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return getSubmissionEnvelope(ctx, s.db, pageID, publicID)
+}
+
+func getSubmissionEnvelope(ctx context.Context, q dbtx, pageID int64, publicID string) (SubmissionEnvelope, error) {
+	row := q.QueryRowContext(ctx, `
 SELECT id, page_id, public_id, coalesce(uploader_ip, ''), coalesce(receipt_token, ''),
        coalesce(receipt_status, ''), receipt_status_updated_at, created_at
 FROM submission_envelopes
@@ -573,6 +589,10 @@ WHERE page_id = ? AND public_id = ?`, pageID, publicID)
 	return scanSubmissionEnvelope(row)
 }
 
+// CreateUpload records an upload as one atomic unit: the submission envelope,
+// the upload row, and the upload.accepted custody event either all commit or
+// none do. A partial record — an upload without its custody event — would
+// silently break the custody-chain guarantee the manifest is built on.
 func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, error) {
 	submissionID := in.SubmissionID
 	if strings.TrimSpace(submissionID) == "" {
@@ -582,7 +602,23 @@ func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, err
 		}
 		submissionID = generated
 	}
-	envelope, err := s.EnsureSubmissionEnvelope(ctx, SubmissionEnvelopeCreate{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Upload{}, err
+	}
+	upload, err := createUpload(ctx, tx, in, submissionID)
+	if err != nil {
+		_ = tx.Rollback()
+		return Upload{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Upload{}, err
+	}
+	return upload, nil
+}
+
+func createUpload(ctx context.Context, tx *sql.Tx, in UploadCreate, submissionID string) (Upload, error) {
+	envelope, err := ensureSubmissionEnvelope(ctx, tx, SubmissionEnvelopeCreate{
 		PageID:     in.PageID,
 		PublicID:   submissionID,
 		UploaderIP: in.UploaderIP,
@@ -590,7 +626,7 @@ func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, err
 	if err != nil {
 		return Upload{}, err
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
 INSERT INTO uploads (page_id, submission_envelope_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
                      encryption_mode, encryption_algorithm, encryption_envelope, object_sha512, object_hash_algorithm)
 VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
@@ -603,7 +639,7 @@ VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''
 	if err != nil {
 		return Upload{}, err
 	}
-	if _, err := s.RecordCustodyEvent(ctx, CustodyEventCreate{
+	if _, err := recordCustodyEvent(ctx, tx, CustodyEventCreate{
 		PageID:               in.PageID,
 		UploadID:             &id,
 		SubmissionEnvelopeID: &envelope.ID,
@@ -613,7 +649,7 @@ VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''
 	}); err != nil {
 		return Upload{}, err
 	}
-	return s.GetUpload(ctx, in.PageID, id)
+	return getUpload(ctx, tx, in.PageID, id)
 }
 
 func (s *SQLite) ListUploads(ctx context.Context, pageID int64) ([]Upload, error) {
@@ -644,7 +680,11 @@ ORDER BY coalesce(se.created_at, u.uploaded_at) DESC, se.id DESC, u.uploaded_at 
 }
 
 func (s *SQLite) GetUpload(ctx context.Context, pageID, uploadID int64) (Upload, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return getUpload(ctx, s.db, pageID, uploadID)
+}
+
+func getUpload(ctx context.Context, q dbtx, pageID, uploadID int64) (Upload, error) {
+	row := q.QueryRowContext(ctx, `
 SELECT u.id, u.page_id, u.s3_key, u.original_name, u.size_bytes, coalesce(u.content_type, ''), coalesce(u.uploader_ip, ''),
        coalesce(se.public_id, ''), se.created_at,
        coalesce(u.encryption_mode, ''), coalesce(u.encryption_algorithm, ''), coalesce(u.encryption_envelope, ''),
@@ -723,6 +763,10 @@ WHERE page_id = ? AND public_id = ?`, status, pageID, submissionID)
 }
 
 func (s *SQLite) RecordCustodyEvent(ctx context.Context, in CustodyEventCreate) (CustodyEvent, error) {
+	return recordCustodyEvent(ctx, s.db, in)
+}
+
+func recordCustodyEvent(ctx context.Context, q dbtx, in CustodyEventCreate) (CustodyEvent, error) {
 	eventType := strings.TrimSpace(in.EventType)
 	actor := strings.TrimSpace(in.Actor)
 	if in.PageID == 0 {
@@ -738,7 +782,7 @@ func (s *SQLite) RecordCustodyEvent(ctx context.Context, in CustodyEventCreate) 
 	if detail == "" {
 		detail = "{}"
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := q.ExecContext(ctx, `
 INSERT INTO custody_events (page_id, submission_envelope_id, upload_id, event_type, actor, detail)
 VALUES (?, ?, ?, ?, ?, nullif(?, ''))`,
 		in.PageID, nullableInt(in.SubmissionEnvelopeID), nullableInt(in.UploadID), eventType, actor, detail)
@@ -749,11 +793,15 @@ VALUES (?, ?, ?, ?, ?, nullif(?, ''))`,
 	if err != nil {
 		return CustodyEvent{}, err
 	}
-	return s.GetCustodyEvent(ctx, id)
+	return getCustodyEvent(ctx, q, id)
 }
 
 func (s *SQLite) GetCustodyEvent(ctx context.Context, id int64) (CustodyEvent, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return getCustodyEvent(ctx, s.db, id)
+}
+
+func getCustodyEvent(ctx context.Context, q dbtx, id int64) (CustodyEvent, error) {
+	row := q.QueryRowContext(ctx, `
 SELECT ce.id, ce.page_id, ce.upload_id, ce.submission_envelope_id, coalesce(se.public_id, ''),
        ce.event_type, ce.actor, coalesce(ce.detail, ''), ce.created_at
 FROM custody_events ce

@@ -106,6 +106,61 @@ func TestSQLiteStoreCreatesPagesAndAggregatesUploads(t *testing.T) {
 	}
 }
 
+// CreateUpload performs three writes (submission envelope, upload row, custody
+// event). A failure partway through must leave no partial state behind: an
+// upload row without its upload.accepted custody event would silently break the
+// custody-chain guarantee, and an orphaned envelope would surface as a phantom
+// submission. The custody_events table is dropped out from under the store to
+// force the third write to fail deterministically.
+func TestCreateUploadIsAtomicWhenCustodyEventInsertFails(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "sprag.db")
+	db, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	page, err := db.CreatePage(ctx, store.PageCreate{
+		Slug:  "atomicslug000001",
+		Title: "Atomicity check",
+	})
+	if err != nil {
+		t.Fatalf("CreatePage failed: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw connection: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.ExecContext(ctx, "DROP TABLE custody_events"); err != nil {
+		t.Fatalf("drop custody_events: %v", err)
+	}
+
+	submissionID := "33333333-3333-4333-8333-333333333333"
+	if _, err := db.CreateUpload(ctx, store.UploadCreate{
+		PageID:       page.ID,
+		S3Key:        "pages/atomic/file-1/report.pdf",
+		OriginalName: "report.pdf",
+		SizeBytes:    12,
+		SubmissionID: submissionID,
+	}); err == nil {
+		t.Fatal("CreateUpload succeeded despite missing custody_events table")
+	}
+
+	uploads, err := db.ListUploads(ctx, page.ID)
+	if err != nil {
+		t.Fatalf("ListUploads failed: %v", err)
+	}
+	if len(uploads) != 0 {
+		t.Fatalf("upload row survived failed CreateUpload: %#v", uploads)
+	}
+	if _, err := db.GetSubmissionEnvelope(ctx, page.ID, submissionID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetSubmissionEnvelope after failed CreateUpload = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSQLiteStoreCreatesReceiptForSubmissionEnvelope(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "sprag.db"))

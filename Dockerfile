@@ -17,9 +17,17 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" -o /out/sprag ./cmd/sprag
+# Pre-create the data directory so the final image can ship it owned by the
+# nonroot user (65532); distroless has no shell to chown at runtime.
+RUN mkdir -p /out/data
 
-FROM gcr.io/distroless/static-debian12
+# The :nonroot variant runs as UID 65532 so a compromise of the process does
+# not hand out root inside the container.
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /
 COPY --from=builder /out/sprag /sprag
+# Named volumes copy this ownership on first use; for bind mounts the host
+# directory must be writable by UID 65532 (see docker-compose.yml).
+COPY --from=builder --chown=65532:65532 /out/data /data
 EXPOSE 8080
 ENTRYPOINT ["/sprag"]

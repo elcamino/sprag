@@ -51,9 +51,20 @@ import (
 )
 
 var (
-	ErrBlobNotFound = blob.ErrNotFound
-	errTooLarge     = errors.New("upload too large")
+	ErrBlobNotFound  = blob.ErrNotFound
+	errTooLarge      = errors.New("upload too large")
+	errTooManyFields = errors.New("too many multipart fields")
 )
+
+// uploadOverheadAllowance is the request-body headroom granted on top of the
+// page's file-size limit for form fields (submission id, E2E envelope) and
+// multipart framing.
+const uploadOverheadAllowance = 1 << 20
+
+func isMaxBytesError(err error) bool {
+	var maxBytes *http.MaxBytesError
+	return errors.As(err, &maxBytes)
+}
 
 const (
 	sessionCookie = "sprag_session"
@@ -94,15 +105,16 @@ type Dependencies struct {
 }
 
 type Server struct {
-	store     *store.SQLite
-	blobs     blob.Store
-	cfg       Config
-	logger    *slog.Logger
-	clock     func() time.Time
-	passHash  []byte
-	ipIDs     ipIdentifier
-	loginRate *rateLimiter
-	pinRate   *rateLimiter
+	store      *store.SQLite
+	blobs      blob.Store
+	cfg        Config
+	logger     *slog.Logger
+	clock      func() time.Time
+	passHash   []byte
+	ipIDs      ipIdentifier
+	loginRate  *rateLimiter
+	pinRate    *rateLimiter
+	uploadRate *rateLimiter
 }
 
 func New(deps Dependencies) (http.Handler, error) {
@@ -166,15 +178,16 @@ func New(deps Dependencies) (http.Handler, error) {
 		}
 	}
 	s := &Server{
-		store:     deps.Store,
-		blobs:     deps.BlobStore,
-		cfg:       deps.Config,
-		logger:    deps.Logger,
-		clock:     deps.Clock,
-		passHash:  passHash,
-		ipIDs:     ipIDs,
-		loginRate: newRateLimiter(),
-		pinRate:   newRateLimiter(),
+		store:      deps.Store,
+		blobs:      deps.BlobStore,
+		cfg:        deps.Config,
+		logger:     deps.Logger,
+		clock:      deps.Clock,
+		passHash:   passHash,
+		ipIDs:      ipIDs,
+		loginRate:  newRateLimiter(),
+		pinRate:    newRateLimiter(),
+		uploadRate: newRateLimiter(),
 	}
 	return s.routes(deps.StaticFS), nil
 }
@@ -183,6 +196,7 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
+	r.Use(s.securityHeaders)
 
 	r.Get("/api/u/{slug}", s.handlePublicPage)
 	r.Post("/api/u/{slug}/pin", s.handlePIN)
@@ -212,6 +226,29 @@ func (s *Server) routes(staticFS http.FileSystem) http.Handler {
 		r.NotFound(spaHandler(staticFS))
 	}
 	return r
+}
+
+// securityHeaders applies baseline browser hardening to every response. It
+// lives in the app rather than the reverse proxy so all deployment modes are
+// covered, including the Tor topology where no proxy sits in front. The CSP
+// permits inline style attributes (React sets them) but no inline or external
+// scripts beyond same-origin bundles. HSTS follows SecureCookies because onion
+// services are plain HTTP end to end, where the header is meaningless.
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; " +
+		"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", csp)
+		if s.cfg.SecureCookies {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -799,12 +836,34 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "pin_required", "PIN required")
 		return
 	}
+	if !s.uploadRate.Allow(s.uploadRateKey(page.Slug, r), 30, time.Minute, s.clock()) {
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many uploads")
+		return
+	}
+	// Bound the whole request before parsing begins: parts that are skipped
+	// (wrong field name) are drained and discarded, so without this ceiling a
+	// client could stream unbounded junk the server reads in full. The file
+	// part itself is limited separately by countingLimitReader; the allowance
+	// only covers form fields and multipart framing.
+	bodyLimit := s.effectiveMaxFileSize(page) + uploadOverheadAllowance
+	if page.E2EEnabled {
+		bodyLimit += e2e.CiphertextOverheadAllowance
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_multipart", "expected multipart form data")
 		return
 	}
 	uploadParts, err := nextUploadParts(reader)
+	if errors.Is(err, errTooManyFields) {
+		writeError(w, http.StatusBadRequest, "too_many_fields", "too many multipart form fields")
+		return
+	}
+	if isMaxBytesError(err) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the allowed size")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "missing_file", "multipart field 'file' is required")
 		return
@@ -859,6 +918,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if err := s.blobs.Upload(r.Context(), key, io.TeeReader(counting, objectHash), contentType); errors.Is(err, errTooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, "file_too_large", "file exceeds the configured size limit")
 		return
+	} else if isMaxBytesError(err) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the allowed size")
+		return
 	} else if err != nil {
 		s.serverError(w, err)
 		return
@@ -878,6 +940,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		ObjectSHA512:        objectSHA512,
 	})
 	if err != nil {
+		// The blob was already written; remove it so a client retry does not
+		// strand an unreferenced object invisible to the admin UI. Cleanup
+		// must run even if the client has disconnected.
+		cleanupCtx := context.WithoutCancel(r.Context())
+		if delErr := s.blobs.Delete(cleanupCtx, key); delErr != nil {
+			s.logger.Error("delete orphaned blob after failed upload record", "key", key, "error", delErr)
+		}
 		s.serverError(w, err)
 		return
 	}
@@ -1702,6 +1771,13 @@ func (s *Server) pinRateKey(slug string, r *http.Request) string {
 	return "pin:" + slug + ":" + s.clientIPIdentifier(r)
 }
 
+func (s *Server) uploadRateKey(slug string, r *http.Request) string {
+	if s.cfg.AnonymousIngress {
+		return "anonymous-ingress:upload:" + slug
+	}
+	return "upload:" + slug + ":" + s.clientIPIdentifier(r)
+}
+
 func (s *Server) uploaderIdentifier(r *http.Request) string {
 	if s.cfg.AnonymousIngress {
 		return ""
@@ -1780,6 +1856,10 @@ type uploadParts struct {
 }
 
 func nextUploadParts(reader *multipart.Reader) (uploadParts, error) {
+	// An uploader sends at most a handful of fields (submission id, E2E
+	// envelope); anything beyond this is a client streaming junk to burn
+	// server time.
+	const maxFields = 16
 	fields := map[string]string{}
 	for {
 		part, err := reader.NextPart()
@@ -1790,6 +1870,10 @@ func nextUploadParts(reader *multipart.Reader) (uploadParts, error) {
 			return uploadParts{fields: fields, file: part}, nil
 		}
 		if part.FileName() == "" && part.FormName() != "" {
+			if len(fields) >= maxFields {
+				_ = part.Close()
+				return uploadParts{}, errTooManyFields
+			}
 			value, err := readSmallMultipartField(part)
 			_ = part.Close()
 			if err != nil {

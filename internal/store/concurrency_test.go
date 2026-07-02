@@ -57,6 +57,35 @@ func TestOpenEnablesWALAndPerConnectionBusyTimeout(t *testing.T) {
 	}
 }
 
+// foreign_keys is a per-connection setting like busy_timeout. The modernc
+// driver enables it on every new connection by default; DeletePage relies on
+// ON DELETE CASCADE to purge uploads and custody events, so this pins that
+// driver behavior — if it ever changes, the pragma must move into the DSN.
+func TestOpenEnforcesForeignKeysOnEveryConnection(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "z.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+
+	s.db.SetMaxOpenConns(4)
+	for i := 0; i < 4; i++ {
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn %d: %v", i, err)
+		}
+		var enabled int
+		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled); err != nil {
+			t.Fatalf("foreign_keys on conn %d: %v", i, err)
+		}
+		if enabled != 1 {
+			t.Fatalf("conn %d foreign_keys = %d, want 1", i, enabled)
+		}
+		_ = conn.Close()
+	}
+}
+
 func TestConcurrentUploadsDoNotErrorUnderContention(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, filepath.Join(t.TempDir(), "z.db"))

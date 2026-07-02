@@ -1,5 +1,4 @@
-<!doctype html>
-<!--
+/*
 Sprag - a post-quantum-safe end-to-end encrypted file dropbox.
 Copyright (C) 2026 Tobias von Dewitz <tobias@vondewitz.org>
 
@@ -15,19 +14,16 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
--->
+*/
 
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="robots" content="noindex,nofollow" />
-    <title>Sprag</title>
-    <!-- Kept external (not inline) so the CSP can enforce script-src 'self'. -->
-    <script src="/theme-init.js"></script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+// Applies the persisted theme before the app bundle loads to avoid a flash of
+// the wrong theme. Served as a separate same-origin file (not inline) so the
+// Content-Security-Policy can keep script-src limited to 'self'.
+(function () {
+  try {
+    var m = localStorage.getItem("sprag-theme");
+    if (m === "light" || m === "dark") {
+      document.documentElement.setAttribute("data-theme", m);
+    }
+  } catch (e) {}
+})();

@@ -80,9 +80,12 @@ E2E_INTAKE_ENABLED=false
 E2E_INTAKE_REQUIRED=false
 ```
 
-Start with the bundled Caddy reverse proxy:
+Start with the bundled Caddy reverse proxy. The container runs as the
+distroless nonroot user (UID 65532), so the bind-mounted data directory must be
+writable by that UID:
 
 ```bash
+mkdir -p data && sudo chown 65532:65532 data
 SPRAG_DOMAIN=sprag.example.com docker compose up --build -d
 ```
 

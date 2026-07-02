@@ -7,6 +7,10 @@ services:
       ANONYMOUS_INGRESS: "true"
       COOKIE_SECURE: auto
       PORT: "8080"
+      # Tor connects to the app directly with no HTTP proxy in between, so no
+      # X-Forwarded-For hop is trustworthy. If you ever insert a reverse proxy
+      # in front of the app, update this to match or clients can spoof their
+      # apparent address.
       TRUSTED_PROXY_HOPS: "0"
       BASE_URL: ${ONION_BASE_URL:-http://replace-after-first-start.onion}
     volumes:

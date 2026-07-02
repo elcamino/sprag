@@ -22,6 +22,30 @@ import (
 	"github.com/elcamino/sprag/internal/config"
 )
 
+// The listener needs header and idle timeouts so idle or half-open connections
+// cannot pile up, but must NOT set ReadTimeout or WriteTimeout: multi-gigabyte
+// uploads and downloads over slow links are legitimate and would be killed
+// mid-transfer by any whole-request deadline.
+func TestNewHTTPServerBoundsConnectionLifetimes(t *testing.T) {
+	server := newHTTPServer("8080", nil)
+
+	if server.Addr != ":8080" {
+		t.Fatalf("Addr = %q, want :8080", server.Addr)
+	}
+	if server.ReadHeaderTimeout <= 0 {
+		t.Fatal("ReadHeaderTimeout must be set to bound slow-header connections")
+	}
+	if server.IdleTimeout <= 0 {
+		t.Fatal("IdleTimeout must be set to reap idle keep-alive connections")
+	}
+	if server.ReadTimeout != 0 {
+		t.Fatalf("ReadTimeout = %v, want 0 (would kill slow large uploads)", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %v, want 0 (would kill slow large downloads)", server.WriteTimeout)
+	}
+}
+
 func TestNewHTTPConfigPreservesSecureCookieSetting(t *testing.T) {
 	cfg := config.Config{
 		BaseURL:           "http://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcd.onion",

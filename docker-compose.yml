@@ -4,6 +4,9 @@ services:
     env_file:
       - .env
     volumes:
+      # The app runs as UID 65532 (distroless nonroot). A bind mount does not
+      # adjust ownership, so create the directory writable by that UID first:
+      #   mkdir -p data && sudo chown 65532:65532 data
       - ./data:/data
     networks:
       - sprag-net

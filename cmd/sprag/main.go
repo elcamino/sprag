@@ -126,11 +126,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	server := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           handler,
-		ReadHeaderTimeout: 15 * time.Second,
-	}
+	server := newHTTPServer(cfg.Port, handler)
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("server listening", "addr", server.Addr)
@@ -147,6 +143,20 @@ func run(logger *slog.Logger) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// newHTTPServer bounds connection lifetimes without capping transfer time:
+// ReadHeaderTimeout stops slow-header connections and IdleTimeout reaps idle
+// keep-alive connections, but ReadTimeout/WriteTimeout stay unset because
+// multi-gigabyte uploads and downloads over slow links are legitimate and any
+// whole-request deadline would kill them mid-transfer.
+func newHTTPServer(port string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 }
 
