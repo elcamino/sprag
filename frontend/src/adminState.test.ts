@@ -21,6 +21,7 @@ import {
   groupFilesBySubmission,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
+  privateKeyCopiesToForget,
   receiptStatusHelp,
   receiptStatusLabel,
   sealActionHelp,
@@ -28,6 +29,7 @@ import {
   submitStoredPrivateKeyUnlock
 } from "./adminState";
 import { PageSummary, UploadFile } from "./api";
+import { exportPrivateIdentity, generateE2EIdentity } from "./e2eCrypto";
 
 function page(id: number, title = "encryption test"): PageSummary {
   return {
@@ -53,6 +55,24 @@ function upload(id: number, pageID: number): UploadFile {
 }
 
 describe("admin page state", () => {
+  it("forgets every live copy of the selected key, including a differently formatted draft", async () => {
+    const identity = await generateE2EIdentity();
+    const key = exportPrivateIdentity(identity);
+    const compact = JSON.stringify(identity.privateIdentity);
+    const unrelated = exportPrivateIdentity(await generateE2EIdentity());
+    const loaded = { 1: key, 2: compact, 3: unrelated };
+    expect(privateKeyCopiesToForget(1, loaded, compact)).toEqual({ pageIDs: [1, 2], clearDraft: true });
+    expect(loaded[1]).toBe(key);
+    expect(privateKeyCopiesToForget(1, loaded, unrelated)).toEqual({ pageIDs: [1, 2], clearDraft: false });
+  });
+
+  it("can forget malformed pasted keys without clearing unrelated drafts", () => {
+    expect(privateKeyCopiesToForget(1, { 1: " pasted text ", 2: "pasted text", 3: "other" }, "pasted text"))
+      .toEqual({ pageIDs: [1, 2], clearDraft: true });
+    expect(privateKeyCopiesToForget(1, { 1: "", 2: "other" }, "other"))
+      .toEqual({ pageIDs: [1], clearDraft: false });
+  });
+
   it("does not fall back to another page when an explicit selected id is missing", () => {
     expect(selectedPageForID([page(2)], 1)).toBeNull();
   });

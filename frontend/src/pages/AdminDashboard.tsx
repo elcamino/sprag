@@ -42,6 +42,7 @@ import {
   LoadedFiles,
   nextDownloadUnlockPrompt,
   privateKeyControlState,
+  privateKeyCopiesToForget,
   receiptStatusHelp,
   receiptStatusLabel,
   sealActionHelp,
@@ -339,16 +340,24 @@ export default function AdminDashboard() {
 
   function removePrivateKeyFromMemory(page: PageSummary) {
     setError("");
+    const copies = privateKeyCopiesToForget(page.id, pagePrivateKeys, newPagePrivateKey);
     setPagePrivateKeys((current) => {
       const next = { ...current };
-      delete next[page.id];
+      for (const id of copies.pageIDs) delete next[id];
       return next;
     });
     setStoredBrowserKeyPassphrases((current) => {
       const next = { ...current };
-      delete next[page.id];
+      for (const id of copies.pageIDs) delete next[id];
       return next;
     });
+    if (copies.clearDraft) {
+      setNewPagePrivateKey("");
+      setNewPageKeyCopied(false);
+      setStoreNewPageKey(false);
+      setNewPageKeyPassphrase("");
+      setNewPageKeyPassphraseConfirm("");
+    }
   }
 
   async function downloadEncryptedFile(file: UploadFile) {

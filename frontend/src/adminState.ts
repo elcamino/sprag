@@ -15,6 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { PageSummary, ReceiptStatus, UploadFile } from "./api";
+import { parsePrivateIdentity } from "./e2eCrypto";
 
 export type LoadedFiles = {
   pageID: number;
@@ -87,6 +88,27 @@ export function groupFilesBySubmission(files: UploadFile[]): SubmissionFileGroup
 
 export function privateKeyControlState(loadedPrivateKey?: string): PrivateKeyControlState {
   return loadedPrivateKey?.trim() ? "remove-memory" : "unlock";
+}
+
+// One identity may be loaded on several pages and also remain in the creation
+// form. Return every matching live copy so locking does not leave a usable key.
+export function privateKeyCopiesToForget(pageID: number, loaded: Record<number, string>, draft: string) {
+  const target = loaded[pageID]?.trim();
+  const fingerprint = (raw: string): string | undefined => {
+    try {
+      return parsePrivateIdentity(raw).publicIdentity.fingerprint;
+    } catch {
+      return undefined;
+    }
+  };
+  const targetFingerprint = target ? fingerprint(target) : undefined;
+  const matches = (raw: string) => Boolean(target && (
+    raw.trim() === target || (targetFingerprint && fingerprint(raw) === targetFingerprint)
+  ));
+  return {
+    pageIDs: Object.keys(loaded).map(Number).filter(id => id === pageID || matches(loaded[id])),
+    clearDraft: matches(draft)
+  };
 }
 
 export function submitStoredPrivateKeyUnlock<T>(
