@@ -137,6 +137,7 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 2. **Share the capability URL.** The page URL is the upload capability. QR and copy controls are built in.
 3. **Receive submissions.** Uploads are grouped into immutable submission envelopes and can include a sender receipt URL.
 4. **Track file status.** The admin can mark a submission received, reviewed, rejected, or downloaded. The public receipt page shows only that status and aggregate file counts/bytes.
+   Files can join the same submission while its status is **received**. Other statuses prevent further additions; additional files must use a new submission. Resetting the status to **received** permits additions again.
 5. **Download or decrypt.** Plaintext pages support direct download and streamed ZIP export. E2E pages download ciphertext and decrypt in the admin browser with the page private key.
 6. **Export evidence.** Chain-of-custody manifests include stored-object SHA-512 hashes and handling events. In E2E mode the server-side hash is a ciphertext-object hash. Treat these manifests as integrity and handling records, not as legal certification or proof of court admissibility.
 7. **Seal when intake closes.** Sealing a page closes public intake, prevents reopening or page deletion, and marks later handling as post-seal activity.

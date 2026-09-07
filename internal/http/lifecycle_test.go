@@ -233,3 +233,41 @@ func TestUploadAcceptsPageBeforeExpiry(t *testing.T) {
 		t.Fatalf("open page rejected upload: %d %s", r.Code, r.Body.String())
 	}
 }
+
+func TestHandledSubmissionRejectsAdditionalFiles(t *testing.T) {
+	for _, status := range []string{"reviewed", "rejected", "downloaded"} {
+		t.Run(status, func(t *testing.T) {
+			h, objects := newTestHandler(t)
+			session := loginAdmin(t, h)
+			slug := createPageSlug(t, h, session, map[string]any{"title": "Completed submission"})
+			fields := map[string]string{"submission_id": "submission-reused"}
+			for _, name := range []string{"first.txt", "second.txt"} {
+				r := performMultipartFields(t, h, "/api/u/"+slug, fields, "file", name, []byte("evidence"), nil)
+				if r.Code != http.StatusCreated {
+					t.Fatal(r.Body.String())
+				}
+			}
+			update := performJSON(t, h, http.MethodPatch, "/api/admin/pages/1/submissions/submission-reused/receipt", map[string]string{"status": status}, session, csrfHeader())
+			if update.Code != http.StatusOK {
+				t.Fatal(update.Body.String())
+			}
+			rejected := performMultipartFields(t, h, "/api/u/"+slug, fields, "file", "later.txt", []byte("unreviewed"), nil)
+			if rejected.Code != http.StatusConflict || !strings.Contains(rejected.Body.String(), "submission_closed") {
+				t.Fatalf("handled submission accepted append: %d %s", rejected.Code, rejected.Body.String())
+			}
+			if len(objects.objects) != 2 {
+				t.Fatalf("append left a stored object: %d", len(objects.objects))
+			}
+			files := perform(t, h, http.MethodGet, "/api/admin/pages/1/files", nil, session, nil)
+			var listed []store.Upload
+			decodeJSON(t, files.Body.Bytes(), &listed)
+			if len(listed) != 2 || listed[0].ReceiptStatus != status {
+				t.Fatalf("submission changed: %#v", listed)
+			}
+			fresh := performMultipartFields(t, h, "/api/u/"+slug, map[string]string{"submission_id": "new-submission-id"}, "file", "new.txt", []byte("unreviewed"), nil)
+			if fresh.Code != http.StatusCreated {
+				t.Fatalf("new submission rejected: %d", fresh.Code)
+			}
+		})
+	}
+}

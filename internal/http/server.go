@@ -971,6 +971,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "page_closed", "this page is no longer accepting uploads")
 			return
 		}
+		if errors.Is(err, store.ErrSubmissionClosed) {
+			writeError(w, http.StatusConflict, "submission_closed", "this submission has already been handled; start a new submission for additional files")
+			return
+		}
 		s.serverError(w, err)
 		return
 	}

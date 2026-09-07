@@ -35,9 +35,10 @@ var (
 	// ErrDuplicateSlug is returned by CreatePage when the slug already exists.
 	ErrDuplicateSlug = errors.New("duplicate slug")
 	// ErrPageSealed is returned when an operation would undo a sealed page.
-	ErrPageSealed   = errors.New("page sealed")
-	ErrPageDeleting = errors.New("page deletion in progress")
-	ErrPageClosed   = errors.New("page closed")
+	ErrPageSealed       = errors.New("page sealed")
+	ErrPageDeleting     = errors.New("page deletion in progress")
+	ErrPageClosed       = errors.New("page closed")
+	ErrSubmissionClosed = errors.New("submission already handled")
 	// ErrInvalidReceiptStatus is returned when a receipt status would turn the
 	// status-only receipt into something outside the supported workflow.
 	ErrInvalidReceiptStatus = errors.New("invalid receipt status")
@@ -719,6 +720,11 @@ WHERE id = ? AND deletion_pending = 0 AND sealed_at IS NULL AND is_active = 1
 	})
 	if err != nil {
 		return Upload{}, err
+	}
+	// Handling status applies to the files already in the envelope. Reject
+	// later additions while holding the same write lock as the upload commit.
+	if envelope.ReceiptStatus != ReceiptStatusReceived {
+		return Upload{}, ErrSubmissionClosed
 	}
 	res, err = tx.ExecContext(ctx, `
 INSERT INTO uploads (page_id, submission_envelope_id, s3_key, original_name, size_bytes, content_type, uploader_ip,

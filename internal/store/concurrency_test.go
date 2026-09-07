@@ -262,3 +262,49 @@ func TestPendingDeletionSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUploadWaitsForConcurrentReceiptStatusUpdate(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "receipt-race.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	page, err := s.CreatePage(ctx, PageCreate{Slug: "receipt-race", Title: "Receipt race"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := UploadCreate{PageID: page.ID, SubmissionID: "same-submission", S3Key: "first", OriginalName: "first", SizeBytes: 1}
+	if _, err := s.CreateUpload(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE submission_envelopes SET receipt_status = 'reviewed' WHERE page_id = ?`, page.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { _, err := s.CreateUpload(ctx, input); result <- err }()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, ErrSubmissionClosed) {
+		t.Fatalf("append following status commit: %v", err)
+	}
+	files, err := s.ListUploads(ctx, page.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("completed submission has %d files", len(files))
+	}
+	if _, err := s.UpdateReceiptStatus(ctx, page.ID, input.SubmissionID, ReceiptStatusReceived); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUpload(ctx, input); err != nil {
+		t.Fatalf("explicitly reopened submission rejected: %v", err)
+	}
+}
