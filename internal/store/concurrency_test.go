@@ -18,7 +18,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -53,14 +55,12 @@ func TestOpenEnablesWALAndPerConnectionBusyTimeout(t *testing.T) {
 		if timeout < 1000 {
 			t.Fatalf("conn %d busy_timeout = %d, want >= 1000", i, timeout)
 		}
-		_ = conn.Close()
+		defer conn.Close()
 	}
 }
 
-// foreign_keys is a per-connection setting like busy_timeout. The modernc
-// driver enables it on every new connection by default; DeletePage relies on
-// ON DELETE CASCADE to purge uploads and custody events, so this pins that
-// driver behavior — if it ever changes, the pragma must move into the DSN.
+// Hold every connection until the test ends so each check covers a distinct
+// connection, including connections that did not execute migrations.
 func TestOpenEnforcesForeignKeysOnEveryConnection(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, filepath.Join(t.TempDir(), "z.db"))
@@ -75,6 +75,7 @@ func TestOpenEnforcesForeignKeysOnEveryConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Conn %d: %v", i, err)
 		}
+		defer conn.Close()
 		var enabled int
 		if err := conn.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&enabled); err != nil {
 			t.Fatalf("foreign_keys on conn %d: %v", i, err)
@@ -82,7 +83,74 @@ func TestOpenEnforcesForeignKeysOnEveryConnection(t *testing.T) {
 		if enabled != 1 {
 			t.Fatalf("conn %d foreign_keys = %d, want 1", i, enabled)
 		}
-		_ = conn.Close()
+	}
+}
+
+func TestDeletePageCascadesOnNewConnection(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "cascade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	page, err := s.CreatePage(ctx, PageCreate{Slug: "original", Title: "Original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUpload(ctx, UploadCreate{PageID: page.ID, S3Key: "object", OriginalName: "file", SizeBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := s.DeletePage(ctx, page.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.CreatePage(ctx, PageCreate{Slug: "replacement", Title: "Replacement"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.UploadCount != 0 {
+		t.Fatalf("new page inherited %d uploads", next.UploadCount)
+	}
+	for _, table := range []string{"uploads", "submission_envelopes", "custody_events"} {
+		var count int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s retained %d orphaned records", table, count)
+		}
+	}
+}
+
+func TestOpenRejectsExistingForeignKeyViolations(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "invalid.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.ExecContext(ctx, `INSERT INTO uploads (page_id, s3_key, original_name, size_bytes) VALUES (999, 'orphan', 'orphan', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err == nil {
+		reopened.Close()
+		t.Fatal("opened a database with orphaned uploads")
+	}
+	if !strings.Contains(err.Error(), "foreign key violation") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

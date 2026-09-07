@@ -241,7 +241,7 @@ func (s *SQLite) Close() error {
 // file-level mode and is meaningless for an in-memory database, so it is omitted
 // there.
 func dsn(path string) string {
-	pragmas := "_pragma=busy_timeout(5000)"
+	pragmas := "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 	if path != ":memory:" {
 		pragmas += "&_pragma=journal_mode(WAL)"
 	}
@@ -343,6 +343,11 @@ CREATE INDEX IF NOT EXISTS idx_custody_events_page ON custody_events(page_id, cr
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_uploads_submission ON uploads(submission_envelope_id, uploaded_at DESC)`); err != nil {
 		return err
 	}
+	// Enabling constraints does not validate existing rows. Refuse inconsistent
+	// databases before backfills can obscure their broken relationships.
+	if err := s.checkForeignKeys(ctx); err != nil {
+		return err
+	}
 	if err := s.backfillSubmissionEnvelopes(ctx); err != nil {
 		return err
 	}
@@ -356,6 +361,18 @@ CREATE INDEX IF NOT EXISTS idx_custody_events_page ON custody_events(page_id, cr
 		return err
 	}
 	return nil
+}
+
+func (s *SQLite) checkForeignKeys(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return fmt.Errorf("database contains a foreign key violation; restore a consistent backup or repair the database before starting Sprag")
+	}
+	return rows.Err()
 }
 
 func (s *SQLite) ensureColumn(ctx context.Context, table, name, def string) error {
