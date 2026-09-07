@@ -1013,6 +1013,57 @@ func TestE2EDisabledRejectsEncryptedPageIdentity(t *testing.T) {
 	}
 }
 
+func TestRequiredE2EClosesExistingPlaintextPages(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "existing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	objects := &memoryBlobStore{objects: map[string][]byte{}}
+	cfg := httpapi.Config{BaseURL: "https://sprag.example.test", SessionSecret: bytes.Repeat([]byte("x"), 32), AdminUsername: "admin", AdminPassword: "correct-password", MaxFileSize: 1024}
+	newHandler := func() http.Handler {
+		h, err := httpapi.New(httpapi.Dependencies{Store: db, BlobStore: objects, Config: cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	h := newHandler()
+	session := loginAdmin(t, h)
+	slug := createPageSlug(t, h, session, map[string]any{"title": "Historical plaintext"})
+	before := performMultipart(t, h, "/api/u/"+slug, "file", "old.txt", []byte("historical"), nil)
+	if before.Code != http.StatusCreated {
+		t.Fatal(before.Body.String())
+	}
+	cfg.E2EIntake.Enabled = true
+	cfg.E2EIntake.Required = true
+	h = newHandler()
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, "/api/u/" + slug},
+		{http.MethodPost, "/api/u/" + slug + "/pin"},
+	} {
+		r := perform(t, h, request.method, request.path, nil, nil, nil)
+		if r.Code != http.StatusNotFound {
+			t.Errorf("%s %s: status=%d", request.method, request.path, r.Code)
+		}
+	}
+	after := performMultipart(t, h, "/api/u/"+slug, "file", "new.txt", []byte("plaintext"), nil)
+	if after.Code != http.StatusNotFound || len(objects.objects) != 1 {
+		t.Fatalf("required E2E accepted plaintext: status=%d objects=%d", after.Code, len(objects.objects))
+	}
+	download := perform(t, h, http.MethodGet, "/api/admin/pages/1/files/1", nil, session, nil)
+	if download.Code != http.StatusOK || download.Body.String() != "historical" {
+		t.Fatalf("historical admin access failed: %d %s", download.Code, download.Body.String())
+	}
+	cfg.E2EIntake.Required = false
+	h = newHandler()
+	meta := perform(t, h, http.MethodGet, "/api/u/"+slug, nil, nil, nil)
+	if meta.Code != http.StatusOK {
+		t.Fatalf("optional E2E should preserve plaintext intake: %d", meta.Code)
+	}
+}
+
 func TestListFilesForDeletedPageReturnsNotFound(t *testing.T) {
 	handler, _ := newTestHandler(t)
 	session := loginAdmin(t, handler)

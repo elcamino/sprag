@@ -1075,7 +1075,8 @@ func (s *Server) publicPage(w http.ResponseWriter, r *http.Request) (store.Page,
 		s.serverError(w, err)
 		return store.Page{}, false
 	}
-	if page.SealedAt != nil || !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) {
+	if page.SealedAt != nil || !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) ||
+		(s.cfg.E2EIntake.Required && !page.E2EEnabled) {
 		writeError(w, http.StatusNotFound, "page_closed", "this page is no longer accepting uploads")
 		return store.Page{}, false
 	}

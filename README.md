@@ -268,6 +268,8 @@ Sprag loads `.env` if present and then reads environment variables. Startup fail
 
 When `E2E_INTAKE_ENABLED=true`, admins can create pages whose uploads are encrypted in the uploader's browser **before any bytes leave the device**. Set `E2E_INTAKE_REQUIRED=true` to reject plaintext pages and plaintext uploads entirely.
 
+Enabling required E2E also closes public intake on existing plaintext pages. Their historical files remain available to the authenticated admin; create and share a new encrypted page to continue receiving files.
+
 **How it works:**
 
 1. The admin generates an encryption identity in the browser. The **public key** is attached to the upload page; the **private key** never touches the server.
