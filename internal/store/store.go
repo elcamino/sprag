@@ -37,6 +37,7 @@ var (
 	// ErrPageSealed is returned when an operation would undo a sealed page.
 	ErrPageSealed   = errors.New("page sealed")
 	ErrPageDeleting = errors.New("page deletion in progress")
+	ErrPageClosed   = errors.New("page closed")
 	// ErrInvalidReceiptStatus is returned when a receipt status would turn the
 	// status-only receipt into something outside the supported workflow.
 	ErrInvalidReceiptStatus = errors.New("invalid receipt status")
@@ -700,13 +701,16 @@ func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, err
 }
 
 func createUpload(ctx context.Context, tx *sql.Tx, in UploadCreate, submissionID string) (Upload, error) {
-	// Acquire the write lock and reject files finishing during bulk deletion.
-	res, err := tx.ExecContext(ctx, `UPDATE pages SET id = id WHERE id = ? AND deletion_pending = 0`, in.PageID)
+	// The first write serializes admission against sealing, deactivation and
+	// deletion. SQLite evaluates expiry at admission, after streaming has ended.
+	res, err := tx.ExecContext(ctx, `UPDATE pages SET id = id
+WHERE id = ? AND deletion_pending = 0 AND sealed_at IS NULL AND is_active = 1
+  AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))`, in.PageID)
 	if err != nil {
 		return Upload{}, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return Upload{}, ErrPageDeleting
+		return Upload{}, ErrPageClosed
 	}
 	envelope, err := ensureSubmissionEnvelope(ctx, tx, SubmissionEnvelopeCreate{
 		PageID:     in.PageID,

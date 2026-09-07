@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elcamino/sprag/internal/blob"
 	httpapi "github.com/elcamino/sprag/internal/http"
@@ -163,5 +164,72 @@ func TestPartialBulkDeletionRetainsAuditAndCanBeRetried(t *testing.T) {
 	r = perform(t, h, http.MethodDelete, "/api/admin/pages/1?files=1", nil, session, csrfHeader())
 	if r.Code != http.StatusNoContent || len(b.objects) != 0 {
 		t.Fatalf("retry failed: %d %s", r.Code, r.Body.String())
+	}
+}
+
+func TestUploadRejectsPageClosedWhileStreaming(t *testing.T) {
+	for _, action := range []string{"seal", "deactivate", "expire", "delete", "bulk-delete"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			objects := &memoryBlobStore{objects: map[string][]byte{}}
+			hooked := &sabotagingBlobStore{inner: objects}
+			h, db := lifecycleHandler(t, hooked)
+			session := loginAdmin(t, h)
+			slug := createPageSlug(t, h, session, map[string]any{"title": "Closing during upload"})
+			hooked.afterUpload = func() {
+				var err error
+				switch action {
+				case "seal":
+					_, err = db.SealPage(ctx, 1)
+				case "deactivate":
+					active := false
+					_, err = db.UpdatePage(ctx, 1, store.PageUpdate{IsActive: &active})
+				case "expire":
+					past := time.Now().Add(-time.Minute)
+					_, err = db.UpdatePage(ctx, 1, store.PageUpdate{ExpiresAt: store.NullableTime{Set: true, Value: &past}})
+				case "delete":
+					err = db.DeletePage(ctx, 1)
+				case "bulk-delete":
+					err = db.BeginPageDeletion(ctx, 1)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := performMultipart(t, h, "/api/u/"+slug, "file", "late.txt", []byte("late evidence"), nil)
+			if r.Code != http.StatusNotFound || !strings.Contains(r.Body.String(), "page_closed") {
+				t.Fatalf("late upload: %d %s", r.Code, r.Body.String())
+			}
+			if len(objects.objects) != 0 {
+				t.Fatal("rejected upload left an orphaned blob")
+			}
+			files, err := db.ListUploads(ctx, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 0 {
+				t.Fatal("closed page accepted upload metadata")
+			}
+			events, err := db.ListCustodyEvents(ctx, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if event.EventType == "upload.accepted" {
+					t.Fatal("closed page recorded acceptance")
+				}
+			}
+		})
+	}
+}
+
+func TestUploadAcceptsPageBeforeExpiry(t *testing.T) {
+	objects := &memoryBlobStore{objects: map[string][]byte{}}
+	h, _ := lifecycleHandler(t, objects)
+	session := loginAdmin(t, h)
+	slug := createPageSlug(t, h, session, map[string]any{"title": "Still open", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+	r := performMultipart(t, h, "/api/u/"+slug, "file", "on-time.txt", []byte("evidence"), nil)
+	if r.Code != http.StatusCreated {
+		t.Fatalf("open page rejected upload: %d %s", r.Code, r.Body.String())
 	}
 }

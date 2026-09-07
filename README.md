@@ -143,6 +143,8 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 
 Deleting a page and its files closes intake before storage cleanup begins. If cleanup fails, the page remains marked **Deletion pending** and cannot be sealed or reopened. Retry **Delete page and files** to finish; completed file deletions and attempted deletions remain in its custody log until the page itself is removed.
 
+An upload must finish while its page is still open. Files still transferring when a page is sealed, deactivated, deleted, or expires are rejected, and their stored objects are cleaned up.
+
 ## Security model
 
 - **No uploader-reachable listing.** The public surface is exactly `GET /api/u/:slug` (metadata), `POST /api/u/:slug/pin`, and `POST /api/u/:slug`. Upload responses never include other files.

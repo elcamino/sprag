@@ -967,6 +967,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		if delErr := s.blobs.Delete(cleanupCtx, key); delErr != nil {
 			s.logger.Error("delete orphaned blob after failed upload record", "key", key, "error", delErr)
 		}
+		if errors.Is(err, store.ErrPageClosed) {
+			writeError(w, http.StatusNotFound, "page_closed", "this page is no longer accepting uploads")
+			return
+		}
 		s.serverError(w, err)
 		return
 	}
