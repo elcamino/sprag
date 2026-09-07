@@ -129,6 +129,78 @@ func TestStoreDoesNotPublishPartialUpload(t *testing.T) {
 	if _, err := objects.Download(context.Background(), key); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("partial object was published: %v", err)
 	}
+	entries, err := os.ReadDir(filepath.Join(root, "pages/drop/upload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed upload left %d temporary files", len(entries))
+	}
+}
+
+func TestStoreSupportsLongOriginalFilenames(t *testing.T) {
+	for _, name := range []string{strings.Repeat("a", 220) + ".txt", strings.Repeat("b", 251) + ".txt", strings.Repeat("界", 80) + ".txt"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			objects, err := filesystem.New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := "pages/drop/upload/" + name
+			if err := objects.Upload(context.Background(), key, strings.NewReader("complete evidence"), "text/plain"); err != nil {
+				t.Fatalf("upload with %d-byte filename: %v", len(name), err)
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "pages/drop/upload"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != name {
+				t.Fatalf("unexpected stored entries: %v", entries)
+			}
+			info, err := entries[0].Info()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Fatalf("object permissions=%v, want 0600", info.Mode().Perm())
+			}
+			body, err := objects.Download(context.Background(), key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(body)
+			body.Close()
+			if err != nil || string(data) != "complete evidence" {
+				t.Fatalf("download=%q, err=%v", data, err)
+			}
+		})
+	}
+}
+
+func TestFailedUploadPreservesExistingObject(t *testing.T) {
+	root := t.TempDir()
+	objects, err := filesystem.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "pages/drop/upload/evidence.txt"
+	if err := objects.Upload(context.Background(), key, strings.NewReader("original"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := objects.Upload(context.Background(), key, failingReader{}, "text/plain"); err == nil {
+		t.Fatal("expected write failure")
+	}
+	data, err := os.ReadFile(filepath.Join(root, key))
+	if err != nil || string(data) != "original" {
+		t.Fatalf("previous object changed: %q %v", data, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "pages/drop/upload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("failed replacement left temporary files: %v", entries)
+	}
 }
 
 type failingReader struct{}

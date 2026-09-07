@@ -70,7 +70,7 @@ func (s *Store) Upload(ctx context.Context, key string, body io.Reader, _ string
 	if err := root.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create object directory: %w", err)
 	}
-	tempKey, err := temporaryKey(dir, path.Base(key))
+	tempKey, err := temporaryKey(dir)
 	if err != nil {
 		return err
 	}
@@ -167,12 +167,14 @@ func validateKey(key string) error {
 	return nil
 }
 
-func temporaryKey(dir, base string) (string, error) {
+func temporaryKey(dir string) (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", fmt.Errorf("generate temporary object name: %w", err)
 	}
-	return path.Join(dir, "."+base+".tmp-"+hex.EncodeToString(random[:])), nil
+	// A valid final filename may already be at the filesystem's component
+	// limit. Keep the temporary name short and independent of the original.
+	return path.Join(dir, ".sprag-upload-"+hex.EncodeToString(random[:])+".tmp"), nil
 }
 
 type contextReader struct {
