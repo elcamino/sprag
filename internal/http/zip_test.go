@@ -17,10 +17,15 @@
 package httpapi_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"github.com/elcamino/sprag/internal/store"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -92,4 +97,110 @@ type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) {
 	return 0, errors.New("simulated storage read failure")
+}
+
+func requireZipAbort(t *testing.T, action func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != http.ErrAbortHandler {
+			t.Errorf("expected aborted ZIP transfer, got %v", r)
+		}
+	}()
+	action()
+	t.Error("corrupt ZIP transfer completed normally")
+}
+
+func TestZipRejectsStoredObjectCorruption(t *testing.T) {
+	for _, content := range []string{"cut", "complete evidence with extra bytes", "COMPLETE EVIDENCE"} {
+		t.Run(content, func(t *testing.T) {
+			objects := &memoryBlobStore{objects: map[string][]byte{}}
+			h, db := lifecycleHandler(t, objects)
+			session := loginAdmin(t, h)
+			slug := createPageSlug(t, h, session, map[string]any{"title": "Integrity"})
+			up := performMultipart(t, h, "/api/u/"+slug, "file", "evidence.txt", []byte("complete evidence"), nil)
+			if up.Code != http.StatusCreated {
+				t.Fatal(up.Body.String())
+			}
+			for key := range objects.objects {
+				objects.objects[key] = []byte(content)
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/admin/pages/1/zip", nil)
+			for _, cookie := range session {
+				request.AddCookie(cookie)
+			}
+			requireZipAbort(t, func() { h.ServeHTTP(recorder, request) })
+			if _, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len())); err == nil {
+				t.Fatal("corrupt content produced a valid ZIP central directory")
+			}
+			events, err := db.ListCustodyEvents(context.Background(), 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if event.EventType == "page.exported" {
+					t.Fatal("corrupt ZIP recorded successful export")
+				}
+			}
+		})
+	}
+}
+
+func TestZipSupportsLegacyObjectsWithoutHashes(t *testing.T) {
+	ctx := context.Background()
+	objects := &memoryBlobStore{objects: map[string][]byte{"legacy": []byte("legacy bytes")}}
+	h, db := lifecycleHandler(t, objects)
+	page, err := db.CreatePage(ctx, store.PageCreate{Slug: "legacy", Title: "Legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateUpload(ctx, store.UploadCreate{PageID: page.ID, S3Key: "legacy", OriginalName: "legacy.txt", SizeBytes: 12}); err != nil {
+		t.Fatal(err)
+	}
+	session := loginAdmin(t, h)
+	r := perform(t, h, http.MethodGet, "/api/admin/pages/1/zip", nil, session, nil)
+	zr, err := zip.NewReader(bytes.NewReader(r.Body.Bytes()), int64(r.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	content, err := io.ReadAll(body)
+	if err != nil || string(content) != "legacy bytes" {
+		t.Fatalf("legacy content=%q error=%v", content, err)
+	}
+}
+
+type failingZipWriter struct{ *httptest.ResponseRecorder }
+
+func (failingZipWriter) Write([]byte) (int, error) {
+	return 0, errors.New("injected finalization error")
+}
+
+func TestZipFinalizationFailureDoesNotRecordExport(t *testing.T) {
+	objects := &memoryBlobStore{objects: map[string][]byte{}}
+	h, db := lifecycleHandler(t, objects)
+	session := loginAdmin(t, h)
+	slug := createPageSlug(t, h, session, map[string]any{"title": "Finalization"})
+	up := performMultipart(t, h, "/api/u/"+slug, "file", "small.txt", []byte("small"), nil)
+	if up.Code != http.StatusCreated {
+		t.Fatal(up.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/pages/1/zip", nil)
+	for _, cookie := range session {
+		request.AddCookie(cookie)
+	}
+	requireZipAbort(t, func() { h.ServeHTTP(failingZipWriter{httptest.NewRecorder()}, request) })
+	events, err := db.ListCustodyEvents(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if strings.Contains(event.EventType, "exported") {
+			t.Fatal("failed finalization recorded export")
+		}
+	}
 }

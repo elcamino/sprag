@@ -651,6 +651,10 @@ func (s *Server) handleZip(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := zw.Close(); err != nil {
 		s.logger.Error("zip finalize failed", "page_id", pageID, "error", err)
+		if r.Context().Err() != nil {
+			return
+		}
+		panic(http.ErrAbortHandler)
 	}
 	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
 		PageID:    pageID,
@@ -799,8 +803,18 @@ func (s *Server) writeZipEntry(ctx context.Context, zw *zip.Writer, names map[st
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(writer, body)
-	return err
+	storedHash := sha512.New()
+	copied, err := io.Copy(io.MultiWriter(writer, storedHash), body)
+	if err != nil {
+		return err
+	}
+	if copied != upload.SizeBytes {
+		return fmt.Errorf("stored object size mismatch: got %d bytes, expected %d", copied, upload.SizeBytes)
+	}
+	if upload.ObjectSHA512 != "" && !strings.EqualFold(upload.ObjectSHA512, hex.EncodeToString(storedHash.Sum(nil))) {
+		return fmt.Errorf("stored object SHA-512 mismatch")
+	}
+	return nil
 }
 
 func (s *Server) handlePublicPage(w http.ResponseWriter, r *http.Request) {
