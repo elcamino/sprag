@@ -19,6 +19,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -200,5 +202,63 @@ func TestOpenInMemoryStillWorks(t *testing.T) {
 	defer s.Close()
 	if _, err := s.CreatePage(ctx, PageCreate{Slug: "memoryslug000001", Title: "T"}); err != nil {
 		t.Fatalf("CreatePage on in-memory store failed: %v", err)
+	}
+}
+
+func TestConcurrentSealAndDeletionHaveOneWinner(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "lifecycle.db")
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 20; i++ {
+		page, err := s.CreatePage(ctx, PageCreate{Slug: fmt.Sprintf("race-%d", i), Title: "Race"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		sealed, deleted := make(chan error, 1), make(chan error, 1)
+		go func() { <-start; _, err := s.SealPage(ctx, page.ID); sealed <- err }()
+		go func() { <-start; deleted <- s.BeginPageDeletion(ctx, page.ID) }()
+		close(start)
+		sealErr, deleteErr := <-sealed, <-deleted
+		if !((sealErr == nil && errors.Is(deleteErr, ErrPageSealed)) || (deleteErr == nil && errors.Is(sealErr, ErrPageDeleting))) {
+			t.Fatalf("expected one winner: seal=%v delete=%v", sealErr, deleteErr)
+		}
+	}
+}
+
+func TestPendingDeletionSurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "resume.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.CreatePage(ctx, PageCreate{Slug: "resume", Title: "Resume"})
+	if err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	if err := s.BeginPageDeletion(ctx, page.ID); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SealPage(ctx, page.ID); !errors.Is(err, ErrPageDeleting) {
+		t.Fatalf("seal after restart: %v", err)
+	}
+	if err := s.BeginPageDeletion(ctx, page.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishPageDeletion(ctx, page.ID); err != nil {
+		t.Fatal(err)
 	}
 }

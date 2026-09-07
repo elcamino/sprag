@@ -141,6 +141,8 @@ The category itself is not empty — self-hosted "reverse share" tools exist, an
 6. **Export evidence.** Chain-of-custody manifests include stored-object SHA-512 hashes and handling events. In E2E mode the server-side hash is a ciphertext-object hash. Treat these manifests as integrity and handling records, not as legal certification or proof of court admissibility.
 7. **Seal when intake closes.** Sealing a page closes public intake, prevents reopening or page deletion, and marks later handling as post-seal activity.
 
+Deleting a page and its files closes intake before storage cleanup begins. If cleanup fails, the page remains marked **Deletion pending** and cannot be sealed or reopened. Retry **Delete page and files** to finish; completed file deletions and attempted deletions remain in its custody log until the page itself is removed.
+
 ## Security model
 
 - **No uploader-reachable listing.** The public surface is exactly `GET /api/u/:slug` (metadata), `POST /api/u/:slug/pin`, and `POST /api/u/:slug`. Upload responses never include other files.

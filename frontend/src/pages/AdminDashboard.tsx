@@ -236,7 +236,15 @@ export default function AdminDashboard() {
 
   async function deletePage(page: PageSummary, filesToo: boolean) {
     if (!window.confirm(filesToo ? "Delete this page and all files?" : "Delete this page?")) return;
-    await api<void>(`/api/admin/pages/${page.id}${filesToo ? "?files=1" : ""}`, { method: "DELETE" });
+    setError("");
+    try {
+      await api<void>(`/api/admin/pages/${page.id}${filesToo ? "?files=1" : ""}`, { method: "DELETE" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete page");
+      await loadPages();
+      await loadFiles(page.id);
+      return;
+    }
     setPages((current) => current.filter((candidate) => candidate.id !== page.id));
     setSelectedID(null);
     setCreated(null);
@@ -555,6 +563,7 @@ export default function AdminDashboard() {
                   <h2>{selected.title}</h2>
                   {selected.description && <p className="muted">{selected.description}</p>}
                   {selected.sealed_at && <p className="muted">Sealed {formatDate(selected.sealed_at)}</p>}
+                  {selected.deletion_pending && <p role="status">Deletion pending. Retry deleting the page and files to finish.</p>}
                 </div>
                 <div className="detail-actions">
                   {selected.sealed_at ? (
@@ -564,13 +573,14 @@ export default function AdminDashboard() {
                     </span>
                   ) : (
                     <>
-                      <button className="secondary-action" onClick={() => toggleActive(selected)}>
+                      <button className="secondary-action" onClick={() => toggleActive(selected)} disabled={selected.deletion_pending}>
                         {selected.is_active ? "Deactivate" : "Activate"}
                       </button>
                       <span className="action-tooltip">
                         <button
                           className="secondary-action"
                           onClick={() => sealPage(selected)}
+                          disabled={selected.deletion_pending}
                           aria-describedby={`seal-action-help-${selected.id}`}
                         >
                           <ShieldCheck size={17} />
@@ -580,7 +590,7 @@ export default function AdminDashboard() {
                           {sealActionHelp}
                         </span>
                       </span>
-                      <button className="icon-button danger" onClick={() => deletePage(selected, false)} title="Delete page">
+                      <button className="icon-button danger" onClick={() => deletePage(selected, false)} title="Delete page" disabled={selected.deletion_pending}>
                         <Trash2 size={18} />
                       </button>
                       <button className="icon-button danger" onClick={() => deletePage(selected, true)} title="Delete page and files">

@@ -35,7 +35,8 @@ var (
 	// ErrDuplicateSlug is returned by CreatePage when the slug already exists.
 	ErrDuplicateSlug = errors.New("duplicate slug")
 	// ErrPageSealed is returned when an operation would undo a sealed page.
-	ErrPageSealed = errors.New("page sealed")
+	ErrPageSealed   = errors.New("page sealed")
+	ErrPageDeleting = errors.New("page deletion in progress")
 	// ErrInvalidReceiptStatus is returned when a receipt status would turn the
 	// status-only receipt into something outside the supported workflow.
 	ErrInvalidReceiptStatus = errors.New("invalid receipt status")
@@ -77,6 +78,7 @@ type Page struct {
 	E2EPublicKeyFingerprint string     `json:"e2e_public_key_fingerprint,omitempty"`
 	CreatedAt               time.Time  `json:"created_at"`
 	SealedAt                *time.Time `json:"sealed_at,omitempty"`
+	DeletionPending         bool       `json:"deletion_pending,omitempty"`
 	UploadCount             int64      `json:"upload_count"`
 	TotalBytes              int64      `json:"total_bytes"`
 }
@@ -270,7 +272,8 @@ CREATE TABLE IF NOT EXISTS pages (
   e2e_public_key TEXT,
   e2e_public_key_fingerprint TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  sealed_at TEXT
+  sealed_at TEXT,
+  deletion_pending INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS submission_envelopes (
   id INTEGER PRIMARY KEY,
@@ -326,6 +329,7 @@ CREATE INDEX IF NOT EXISTS idx_custody_events_page ON custody_events(page_id, cr
 		{"pages", "e2e_public_key", "TEXT"},
 		{"pages", "e2e_public_key_fingerprint", "TEXT"},
 		{"pages", "sealed_at", "TEXT"},
+		{"pages", "deletion_pending", "INTEGER NOT NULL DEFAULT 0"},
 		{"uploads", "submission_envelope_id", "INTEGER REFERENCES submission_envelopes(id) ON DELETE SET NULL"},
 		{"uploads", "encryption_mode", "TEXT"},
 		{"uploads", "encryption_algorithm", "TEXT"},
@@ -414,7 +418,7 @@ func (s *SQLite) ListPages(ctx context.Context) ([]Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at, p.sealed_at,
+       p.created_at, p.sealed_at, p.deletion_pending,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -441,7 +445,7 @@ func (s *SQLite) GetPage(ctx context.Context, id int64) (Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at, p.sealed_at,
+       p.created_at, p.sealed_at, p.deletion_pending,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -455,7 +459,7 @@ func (s *SQLite) GetPageBySlug(ctx context.Context, slug string) (Page, error) {
 SELECT p.id, p.slug, p.title, coalesce(p.description, ''), coalesce(p.pin_hash, ''), p.max_file_size,
        coalesce(p.allowed_ext, ''), p.expires_at, p.is_active,
        p.e2e_enabled, coalesce(p.e2e_algorithm, ''), coalesce(p.e2e_public_key, ''), coalesce(p.e2e_public_key_fingerprint, ''),
-       p.created_at, p.sealed_at,
+       p.created_at, p.sealed_at, p.deletion_pending,
        count(u.id), coalesce(sum(u.size_bytes), 0)
 FROM pages p
 LEFT JOIN uploads u ON u.page_id = p.id
@@ -468,6 +472,9 @@ func (s *SQLite) UpdatePage(ctx context.Context, id int64, in PageUpdate) (Page,
 	page, err := s.GetPage(ctx, id)
 	if err != nil {
 		return Page{}, err
+	}
+	if page.DeletionPending {
+		return Page{}, ErrPageDeleting
 	}
 	if in.Title != nil {
 		page.Title = *in.Title
@@ -497,36 +504,95 @@ func (s *SQLite) UpdatePage(ctx context.Context, id int64, in PageUpdate) (Page,
 	if page.IsActive {
 		active = 1
 	}
-	_, err = s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE pages
 SET title = ?, description = nullif(?, ''), pin_hash = nullif(?, ''), max_file_size = ?,
     allowed_ext = nullif(?, ''), expires_at = ?, is_active = ?,
     e2e_enabled = ?, e2e_algorithm = nullif(?, ''), e2e_public_key = nullif(?, ''),
     e2e_public_key_fingerprint = nullif(?, '')
-WHERE id = ?`,
+WHERE id = ? AND deletion_pending = 0 AND (sealed_at IS NULL OR ? = 0)`,
 		page.Title, page.Description, page.PinHash, nullableInt(page.MaxFileSize), page.AllowedExt, formatTimePtr(page.ExpiresAt), active,
-		boolInt(page.E2EEnabled), page.E2EAlgorithm, page.E2EPublicKey, page.E2EPublicKeyFingerprint, id)
+		boolInt(page.E2EEnabled), page.E2EAlgorithm, page.E2EPublicKey, page.E2EPublicKeyFingerprint, id, active)
 	if err != nil {
 		return Page{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Page{}, s.pageMutationError(ctx, id)
 	}
 	return s.GetPage(ctx, id)
 }
 
-func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
+// pageMutationError distinguishes a missing page from a lifecycle conflict.
+func (s *SQLite) pageMutationError(ctx context.Context, id int64) error {
 	page, err := s.GetPage(ctx, id)
 	if err != nil {
 		return err
 	}
+	if page.DeletionPending {
+		return ErrPageDeleting
+	}
 	if page.SealedAt != nil {
 		return ErrPageSealed
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM pages WHERE id = ?`, id)
+	return ErrNotFound
+}
+
+// DeletePage removes metadata only. It cannot race an existing bulk deletion
+// and orphan the remaining objects by removing its durable recovery state.
+func (s *SQLite) DeletePage(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM pages WHERE id = ? AND sealed_at IS NULL AND deletion_pending = 0`, id)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.pageMutationError(ctx, id)
+	}
+	return nil
+}
+
+// BeginPageDeletion durably closes intake before any external object deletion.
+// Its first statement acquires the SQLite write lock, serializing against seal.
+func (s *SQLite) BeginPageDeletion(ctx context.Context, id int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE pages SET deletion_pending = 1, is_active = 0 WHERE id = ? AND sealed_at IS NULL AND deletion_pending = 0`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		var pending bool
+		var sealed sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT deletion_pending, sealed_at FROM pages WHERE id = ?`, id).Scan(&pending, &sealed)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if sealed.Valid {
+			return ErrPageSealed
+		}
+		if pending {
+			return tx.Commit()
+		}
 		return ErrNotFound
+	}
+	if _, err := recordCustodyEvent(ctx, tx, CustodyEventCreate{PageID: id, EventType: "page.deletion_started", Actor: "admin"}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) FinishPageDeletion(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM pages WHERE id = ? AND deletion_pending = 1 AND sealed_at IS NULL AND NOT EXISTS (SELECT 1 FROM uploads WHERE page_id = ?)`, id, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.pageMutationError(ctx, id)
 	}
 	return nil
 }
@@ -536,13 +602,12 @@ func (s *SQLite) SealPage(ctx context.Context, id int64) (Page, error) {
 UPDATE pages
 SET sealed_at = coalesce(sealed_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     is_active = 0
-WHERE id = ?`, id)
+WHERE id = ? AND deletion_pending = 0`, id)
 	if err != nil {
 		return Page{}, err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return Page{}, ErrNotFound
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Page{}, s.pageMutationError(ctx, id)
 	}
 	return s.GetPage(ctx, id)
 }
@@ -635,6 +700,14 @@ func (s *SQLite) CreateUpload(ctx context.Context, in UploadCreate) (Upload, err
 }
 
 func createUpload(ctx context.Context, tx *sql.Tx, in UploadCreate, submissionID string) (Upload, error) {
+	// Acquire the write lock and reject files finishing during bulk deletion.
+	res, err := tx.ExecContext(ctx, `UPDATE pages SET id = id WHERE id = ? AND deletion_pending = 0`, in.PageID)
+	if err != nil {
+		return Upload{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Upload{}, ErrPageDeleting
+	}
 	envelope, err := ensureSubmissionEnvelope(ctx, tx, SubmissionEnvelopeCreate{
 		PageID:     in.PageID,
 		PublicID:   submissionID,
@@ -643,7 +716,7 @@ func createUpload(ctx context.Context, tx *sql.Tx, in UploadCreate, submissionID
 	if err != nil {
 		return Upload{}, err
 	}
-	res, err := tx.ExecContext(ctx, `
+	res, err = tx.ExecContext(ctx, `
 INSERT INTO uploads (page_id, submission_envelope_id, s3_key, original_name, size_bytes, content_type, uploader_ip,
                      encryption_mode, encryption_algorithm, encryption_envelope, object_sha512, object_hash_algorithm)
 VALUES (?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
@@ -724,6 +797,28 @@ func (s *SQLite) DeleteUpload(ctx context.Context, pageID, uploadID int64) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+// CompleteUploadDeletion preserves a deletion snapshot and removes the upload
+// in one transaction. A failure leaves its metadata available for retry.
+func (s *SQLite) CompleteUploadDeletion(ctx context.Context, pageID, uploadID int64, detail string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `INSERT INTO custody_events (page_id, submission_envelope_id, upload_id, event_type, actor, detail)
+ SELECT page_id, submission_envelope_id, id, 'file.deleted', 'admin', ? FROM uploads WHERE page_id = ? AND id = ?`, detail, pageID, uploadID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM uploads WHERE page_id = ? AND id = ?`, pageID, uploadID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLite) GetReceipt(ctx context.Context, token string) (Receipt, error) {
@@ -926,7 +1021,7 @@ func scanPage(row scanner) (Page, error) {
 	var e2eEnabled int
 	err := row.Scan(&page.ID, &page.Slug, &page.Title, &page.Description, &page.PinHash, &max, &page.AllowedExt, &expires, &active,
 		&e2eEnabled, &page.E2EAlgorithm, &page.E2EPublicKey, &page.E2EPublicKeyFingerprint,
-		&created, &sealed, &page.UploadCount, &page.TotalBytes)
+		&created, &sealed, &page.DeletionPending, &page.UploadCount, &page.TotalBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Page{}, ErrNotFound
 	}

@@ -331,6 +331,10 @@ func (s *Server) handleUpdatePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := s.store.UpdatePage(r.Context(), pageID, update)
+	if errors.Is(err, store.ErrPageDeleting) {
+		writeError(w, http.StatusConflict, "page_deleting", "page deletion is in progress")
+		return
+	}
 	if errors.Is(err, store.ErrPageSealed) {
 		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be reopened")
 		return
@@ -378,6 +382,10 @@ func (s *Server) handleSealPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, err := s.store.SealPage(r.Context(), pageID)
+	if errors.Is(err, store.ErrPageDeleting) {
+		writeError(w, http.StatusConflict, "page_deleting", "page deletion is in progress")
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "page not found")
 		return
@@ -409,41 +417,68 @@ func (s *Server) handleDeletePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, err := s.store.GetPage(r.Context(), pageID)
-	if errors.Is(err, store.ErrNotFound) {
+	err := s.deletePage(r.Context(), pageID, r.URL.Query().Get("files") == "1")
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "page not found")
-		return
-	}
-	if err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if page.SealedAt != nil {
+	case errors.Is(err, store.ErrPageSealed):
 		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be deleted")
-		return
-	}
-	if r.URL.Query().Get("files") == "1" {
-		uploads, err := s.store.ListUploads(r.Context(), pageID)
-		if err != nil {
-			s.serverError(w, err)
-			return
-		}
-		for _, upload := range uploads {
-			if err := s.blobs.Delete(r.Context(), upload.S3Key); err != nil {
-				s.serverError(w, err)
-				return
-			}
-		}
-	}
-	if err := s.store.DeletePage(r.Context(), pageID); errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "page not found")
-	} else if errors.Is(err, store.ErrPageSealed) {
-		writeError(w, http.StatusConflict, "page_sealed", "sealed pages cannot be deleted")
-	} else if err != nil {
+	case errors.Is(err, store.ErrPageDeleting):
+		writeError(w, http.StatusConflict, "page_deleting", "page deletion is in progress; retry deleting the page and files")
+	case err != nil:
 		s.serverError(w, err)
-	} else {
+	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func (s *Server) deletePage(ctx context.Context, pageID int64, filesToo bool) error {
+	if !filesToo {
+		return s.store.DeletePage(ctx, pageID)
+	}
+	if err := s.store.BeginPageDeletion(ctx, pageID); err != nil {
+		return err
+	}
+	page, err := s.store.GetPage(ctx, pageID)
+	if err != nil {
+		return err
+	}
+	uploads, err := s.store.ListUploads(ctx, pageID)
+	if err != nil {
+		return err
+	}
+	for _, upload := range uploads {
+		if err := s.deleteStoredUpload(ctx, page, upload); err != nil {
+			return err
+		}
+	}
+	return s.store.FinishPageDeletion(ctx, pageID)
+}
+
+func (s *Server) deleteStoredUpload(ctx context.Context, page store.Page, upload store.Upload) error {
+	detail := adminActionDetail(page, map[string]any{
+		"upload_id": upload.ID, "submission_id": upload.SubmissionID,
+		"name": upload.OriginalName, "object_key": upload.S3Key,
+		"bytes": upload.SizeBytes, "object_sha512": upload.ObjectSHA512,
+	})
+	// Persist intent before touching storage, so an interrupted or failed attempt
+	// remains distinguishable from a successfully completed deletion.
+	if _, err := s.store.RecordCustodyEvent(ctx, store.CustodyEventCreate{
+		PageID: page.ID, UploadID: &upload.ID, EventType: "file.deletion_started", Actor: "admin", Detail: detail,
+	}); err != nil {
+		return err
+	}
+	if err := s.blobs.Delete(ctx, upload.S3Key); err != nil {
+		return err
+	}
+	// A client disconnect after storage deletion must not suppress its audit log.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	err := s.store.CompleteUploadDeletion(cleanupCtx, page.ID, upload.ID, detail)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	} // Another delete completed it.
+	return err
 }
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -547,26 +582,7 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
-	if err := s.blobs.Delete(r.Context(), upload.S3Key); err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if _, err := s.store.RecordCustodyEvent(r.Context(), store.CustodyEventCreate{
-		PageID:    pageID,
-		UploadID:  &upload.ID,
-		EventType: "file.deleted",
-		Actor:     "admin",
-		Detail: adminActionDetail(page, map[string]any{
-			"upload_id":  upload.ID,
-			"name":       upload.OriginalName,
-			"object_key": upload.S3Key,
-			"bytes":      upload.SizeBytes,
-		}),
-	}); err != nil {
-		s.serverError(w, err)
-		return
-	}
-	if err := s.store.DeleteUpload(r.Context(), pageID, fileID); err != nil {
+	if err := s.deleteStoredUpload(r.Context(), page, upload); err != nil {
 		s.serverError(w, err)
 		return
 	}
@@ -1075,7 +1091,7 @@ func (s *Server) publicPage(w http.ResponseWriter, r *http.Request) (store.Page,
 		s.serverError(w, err)
 		return store.Page{}, false
 	}
-	if page.SealedAt != nil || !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) ||
+	if page.DeletionPending || page.SealedAt != nil || !page.IsActive || (page.ExpiresAt != nil && !page.ExpiresAt.After(s.clock())) ||
 		(s.cfg.E2EIntake.Required && !page.E2EEnabled) {
 		writeError(w, http.StatusNotFound, "page_closed", "this page is no longer accepting uploads")
 		return store.Page{}, false

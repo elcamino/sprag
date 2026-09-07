@@ -36,6 +36,7 @@ export type PageSummary = {
   e2e_public_key_fingerprint?: string;
   created_at: string;
   sealed_at?: string;
+  deletion_pending?: boolean;
   upload_count: number;
   total_bytes: number;
 };
